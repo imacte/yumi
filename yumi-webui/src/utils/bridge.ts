@@ -55,14 +55,37 @@ const RealBridge = {
 
   async getInstalledApps(): Promise<string[]> { try { return await listPackages('user'); } catch (e) { return []; } },
   async getAppRules(): Promise<Record<string, string>> { return (await this.getRulesConfig()).app_modes || {}; },
+  
+  // ================= 修改这里 =================
   async saveAppRule(packageName: string, mode: string): Promise<void> {
      const rules = await this.getRulesConfig();
      if (!rules.app_modes) rules.app_modes = {};
-     rules.app_modes[packageName] = mode;
+     
+     if (mode === '') {
+       delete rules.app_modes[packageName];
+     } else {
+       rules.app_modes[packageName] = mode;
+     }
+
+     // 如果设为 fas 模式，同步初始化 per_app_profiles
+     if (mode === 'fas') {
+       if (!rules.fas_rules) rules.fas_rules = {};
+       if (!rules.fas_rules.per_app_profiles) rules.fas_rules.per_app_profiles = {};
+       
+       // 仅在不存在时初始化，防止覆盖用户已修改的帧率配置
+       if (!rules.fas_rules.per_app_profiles[packageName]) {
+         rules.fas_rules.per_app_profiles[packageName] = {
+           target_fps: [30, 60, 90, 120], // 默认覆盖常用帧率
+           fps_margin: 3.0
+         };
+       }
+     }
+     
      await this.saveRulesConfig(rules);
      toast('应用规则已保存');
   },
-  
+  // ============================================
+
   async getDaemonLog(): Promise<string> {
     try {
       const raw = await this.readFile(PATHS.DAEMON_LOG);
@@ -72,11 +95,6 @@ const RealBridge = {
     }
   },
 
-  // ===== 新增：读取 CPU cpufreq sysfs 信息 =====
-
-  /**
-   * 获取系统中所有可用的 cpufreq policy 编号，例如 [0, 4, 7]
-   */
   async getCpuPolicies(): Promise<number[]> {
     try {
       const { errno, stdout } = await exec('ls /sys/devices/system/cpu/cpufreq/');
@@ -90,9 +108,6 @@ const RealBridge = {
     }
   },
 
-  /**
-   * 读取指定 policy 的可用频率列表（单位 kHz 字符串），例如 ["300000", "768000", ...]
-   */
   async getAvailableFreqs(policyNum: number): Promise<string[]> {
     try {
       const path = `/sys/devices/system/cpu/cpufreq/policy${policyNum}/scaling_available_frequencies`;
@@ -103,9 +118,6 @@ const RealBridge = {
     }
   },
 
-  /**
-   * 读取指定 policy 的可用调速器列表，例如 ["schedutil", "performance", "powersave"]
-   */
   async getAvailableGovernors(policyNum: number): Promise<string[]> {
     try {
       const path = `/sys/devices/system/cpu/cpufreq/policy${policyNum}/scaling_available_governors`;

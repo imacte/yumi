@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { onMounted, computed } from 'vue';
 import { useSchedulerStore } from '@/stores/scheduler';
-import { showToast } from 'vant';
 import { useI18n } from 'vue-i18n'; 
+import { toast } from '@/kernelsu'; // 引入原生 ksu toast 替代 Vant
 
 const store = useSchedulerStore();
 const { t, locale } = useI18n(); 
@@ -26,9 +26,9 @@ onMounted(() => {
   store.initData();
 });
 
-const handleModeSelect = (modeKey: string) => {
-  store.switchMode(modeKey);
-  showToast({ type: 'success', message: `${t('switch_success')} ${modeKey}` });
+const handleModeSelect = async (modeKey: string) => {
+  await store.switchMode(modeKey);
+  // 删除了 Vant 的 showToast，底层 Bridge.setMode 已经自带了原生 toast 提示
 };
 
 // 点击复制 QQ 群号
@@ -36,10 +36,11 @@ const copyQQGroup = async () => {
   try {
     // 现代浏览器剪贴板 API
     await navigator.clipboard.writeText('103609137');
-    showToast({ type: 'success', message: t('copied') });
+    // 使用原生的 ksu toast，避免 Vant 白块 bug
+    toast(t('copied'));
   } catch (err) {
     // 兼容性降级处理
-    showToast('QQ: 103609137');
+    toast('QQ: 103609137');
   }
 };
 </script>
@@ -80,9 +81,12 @@ const copyQQGroup = async () => {
     </div>
 
     <div class="section-title">{{ t('global_mode') }}</div>
-    <van-grid :column-num="2" :gutter="12" :border="false" clickable class="mode-grid">
-      <van-grid-item v-for="mode in modes" :key="mode.key" @click="handleModeSelect(mode.key)">
-        <div class="mode-card-content" :class="{ 'is-active': store.currentMode === mode.key }" :style="store.currentMode === mode.key ? { backgroundColor: mode.color } : {}">
+    <van-grid :column-num="2" :gutter="12" :border="false" class="mode-grid">
+      <van-grid-item v-for="mode in modes" :key="mode.key">
+        <div class="mode-card-content" 
+             :class="{ 'is-active': store.currentMode === mode.key }" 
+             :style="store.currentMode === mode.key ? { backgroundColor: mode.color } : {}"
+             @click="handleModeSelect(mode.key)">
           <van-icon :name="mode.icon" size="26" :color="store.currentMode === mode.key ? '#fff' : mode.color" />
           <span class="mode-name" :style="{ color: store.currentMode === mode.key ? '#fff' : '#323233' }">{{ mode.name }}</span>
           <span class="mode-desc" :style="{ color: store.currentMode === mode.key ? 'rgba(255,255,255,0.8)' : '#969799' }">{{ mode.desc }}</span>
@@ -174,7 +178,9 @@ const copyQQGroup = async () => {
   align-items: center; justify-content: center; background-color: #fff;
   border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);
   transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); box-sizing: border-box;
+  cursor: pointer;
 }
+.mode-card-content:active { transform: scale(0.95); opacity: 0.9; }
 .mode-card-content.is-active { box-shadow: 0 6px 16px rgba(0,0,0,0.15); transform: translateY(-2px); }
 .mode-name { margin-top: 8px; font-size: 14px; font-weight: 600; }
 .mode-desc { margin-top: 4px; font-size: 11px; }

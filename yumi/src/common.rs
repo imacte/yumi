@@ -43,6 +43,8 @@ pub enum DaemonEvent {
     },
 
     ConfigReload(RulesConfig),
+
+    ScreenStateChange(bool),
 }
 
 /// 获取模块根目录的绝对路径

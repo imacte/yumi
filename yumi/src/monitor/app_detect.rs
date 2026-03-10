@@ -247,6 +247,7 @@ pub fn app_detection_loop(
         if current_screen_state != last_screen_state {
             info!("{}", t_with_args("app-detect-screen-changed", &fluent_args!("old" => last_screen_state.to_string(), "new" => current_screen_state.to_string())));
             last_screen_state = current_screen_state;
+            let _ = tx.send(DaemonEvent::ScreenStateChange(current_screen_state));
             if current_screen_state {
                 last_package.clear();
                 pending_package.clear();
