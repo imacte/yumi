@@ -6,11 +6,12 @@
 
 [![Android](https://img.shields.io/badge/platform-Android-3DDC84.svg?style=for-the-badge&logo=android)](https://developer.android.com/)
 [![Rust](https://img.shields.io/badge/core-Rust-%23dea584.svg?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
+[![eBPF](https://img.shields.io/badge/probe-eBPF-FF6B6B.svg?style=for-the-badge)](https://ebpf.io/)
 [![WebUI](https://img.shields.io/badge/UI-WebUI-4FC08D.svg?style=for-the-badge&logo=html5)](https://developer.mozilla.org/en-US/docs/Web/HTML)
 [![AArch64](https://img.shields.io/badge/arch-AArch64-FF6B6B.svg?style=for-the-badge)](https://en.wikipedia.org/wiki/AArch64)
 [![Root Required](https://img.shields.io/badge/Root-Required-FF5722.svg?style=for-the-badge)](https://magiskmanager.com/)
 
-**🚀 An Intelligent CPU Scheduling System - Lightweight WebUI + High-Performance Rust Daemon + Built-in FAS Frame-Aware Scheduling**
+**🚀 Intelligent CPU Scheduling System — eBPF Kernel-Level Monitoring + High-Performance Rust Daemon + PID-Controlled FAS Frame-Aware Scheduling + CPU Load Governor**
 
 </div>
 
@@ -18,22 +19,69 @@
 
 ## 📋 About The Project
 
-**yumi** is a powerful Android CPU scheduling control system, consisting of a lightweight **WebUI** management interface and a high-performance **Rust daemon (yumi)**. Through advanced scheduling algorithms and highly configurable performance models, it dynamically adjusts CPU frequency, core allocation strategies, and fine-tunes governor parameters for different usage scenarios to achieve the optimal balance between performance and power efficiency. The built-in **FAS (Frame Aware Scheduling)** engine analyzes game frame times in real time to dynamically adjust CPU frequency on a per-frame basis, maximizing power savings while maintaining smooth gameplay.
+**yumi** is a powerful Android CPU scheduling control system, consisting of a lightweight **WebUI** management interface and a high-performance **Rust daemon (yumi)**. The system uses **eBPF** kernel probes to collect CPU scheduling events and rendering frame data in real time. Combined with an advanced **PID controller** and **CPU Load Governor (CLG)**, it dynamically adjusts CPU frequency for different usage scenarios to achieve the optimal balance between performance and power efficiency. The built-in **FAS (Frame Aware Scheduling)** engine analyzes game frame times in real time to dynamically adjust CPU frequency on a per-frame basis, maximizing power savings while maintaining smooth gameplay.
 
 ### ✨ Key Features
 
-  * 🔄 **Smart Dynamic Mode Switching** - Automatically adjusts performance modes based on the current application.
-  * 🎯 **FAS Frame-Aware Scheduling** - Built-in frame time analysis engine for per-frame dynamic frequency scaling, balancing smoothness and power in gaming scenarios.
-  * 🌐 **Lightweight WebUI** - No extra app required; manage all scheduling settings directly from your browser.
-  * 📱 **App Rule Management** - Set dedicated performance strategies for different applications.
-  * ⚡ **App Launch Boost** - Monitors cgroup changes to provide a temporary performance boost during app launch.
-  * 🔧 **Highly Configurable** - YAML configuration files support deep customization with hot-reload — no restart needed.
+  * 🔄 **Smart Dynamic Mode Switching** — Automatically adjusts performance modes based on the current foreground application.
+  * 🎯 **FAS Frame-Aware Scheduling** — Built-in PID controller + frame time analysis engine for per-frame dynamic frequency scaling, balancing smoothness and power in gaming scenarios.
+  * 📊 **eBPF Kernel-Level Monitoring** — Zero-overhead CPU utilization and frame rate collection via `sched_switch` tracepoint and `queueBuffer` uprobe.
+  * ⚡ **CPU Load Governor (CLG)** — Adaptive frequency scaling based on real-time eBPF load data, replacing traditional kernel governors for everyday non-gaming scenarios.
+  * 🌡️ **Temperature-Aware Throttling** — Reads CPU temperature sensors in real time, automatically throttling when thresholds are exceeded.
+  * 🌙 **Smart Screen-Off Power Saving** — Automatically enters Doze mode when the screen is off, enforcing a low performance ceiling for maximum power savings.
+  * 🌐 **Lightweight WebUI** — No extra app required; manage all scheduling settings directly from your browser.
+  * 📱 **App Rule Management** — Set dedicated performance strategies for different applications, with per-app frame rate gear and margin support.
+  * 🔧 **Highly Configurable** — YAML configuration files support deep customization with hot-reload — no restart needed.
+  * 🌍 **Multi-Language Support** — Fluent-based i18n internationalization system, supporting Chinese and English log output.
 
 ## 🔧 System Requirements
 
   * **Android Version**: Android 8.0 (API 26) and above.
   * **Architecture Support**: ARM64 (AArch64).
   * **Permissions Required**: Root access.
+  * **Kernel Requirements**: eBPF support (`CONFIG_BPF`, `CONFIG_BPF_SYSCALL`, etc.).
+
+## 🏗️ System Architecture
+
+yumi uses a **Monitor + Scheduler** dual-thread architecture, decoupling data collection from scheduling decisions via an `mpsc` event channel:
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  Monitor Thread Group                 │
+│                                                      │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────┐ │
+│  │ app_detect   │  │ fps_monitor  │  │ cpu_monitor │ │
+│  │ (Cgroup)     │  │ (eBPF uprobe)│  │(eBPF trace)│ │
+│  └──────┬───────┘  └──────┬───────┘  └─────┬──────┘ │
+│         │                 │                 │        │
+│         │     ┌───────────┴─────────────────┘        │
+│         │     │   DaemonEvent (mpsc channel)         │
+└─────────┼─────┼──────────────────────────────────────┘
+          │     │
+          ▼     ▼
+┌─────────────────────────────────────────────────────┐
+│              Scheduler IPC Thread                     │
+│                                                      │
+│  ┌──────────────┐  ┌──────────────┐                  │
+│  │ FAS Controller│  │ CLG Governor │                  │
+│  │ (Gaming)      │  │ (Daily use)  │                  │
+│  └──────────────┘  └──────────────┘                  │
+│               ▼                                      │
+│     sysfs Frequency Write (FastWriter)               │
+└─────────────────────────────────────────────────────┘
+```
+
+### Event Bus
+
+The system uses five core events to drive scheduling decisions:
+
+| Event | Source | Description |
+| :--- | :--- | :--- |
+| `ModeChange` | app_detect | Mode change triggered by foreground app switch; carries package name, PID, mode, and temperature. |
+| `FrameUpdate` | fps_monitor (eBPF) | Triggered on each frame render completion; carries frame interval (nanosecond precision). |
+| `SystemLoadUpdate` | cpu_monitor (eBPF) | Triggered every 200ms; carries per-core utilization and foreground app's heaviest thread utilization. |
+| `ScreenStateChange` | screen_detect | Screen on/off events. |
+| `ConfigReload` | config_watcher | Configuration file change events. |
 
 ## 🎯 Performance Modes
 
@@ -41,71 +89,86 @@ yumi offers five performance modes:
 
 | Mode | Icon | Characteristics | Use Case |
 | :--- | :--- | :--- | :--- |
-| **Powersave** | 🔋 | Maximizes battery life, reduces performance output. | Standby, light use, reading. |
-| **Balance** | ⚖️ | The optimal balance between performance and power consumption. | Daily use, social apps. |
-| **Performance** | ⚡ | Prioritizes performance with a moderate increase in power consumption. | Large applications, light gaming. |
-| **Fast** | 🚀 | Unleashes maximum performance, ignoring power consumption. | Heavy gaming, performance testing. |
-| **FAS (Frame-Aware Scheduling)** | 🎯 | Analyzes frame times in real time, dynamically scales frequency per frame, and automatically switches gear levels. | Gaming scenarios — balances smoothness and power saving. |
+| **Powersave** | 🔋 | Maximizes battery life; CLG with low performance ceiling. | Standby, light use, reading. |
+| **Balance** | ⚖️ | CLG adaptive frequency scaling; optimal balance between performance and power. | Daily use, social apps. |
+| **Performance** | ⚡ | CLG high-responsiveness configuration; prioritizes performance. | Large applications, light gaming. |
+| **Fast** | 🚀 | CLG maximum performance output. | Heavy tasks, performance testing. |
+| **FAS (Frame-Aware Scheduling)** | 🎯 | PID controller analyzes frame times in real time; per-frame dynamic frequency scaling with automatic gear switching. | Gaming — balances smoothness and power saving. |
+
+### CLG (CPU Load Governor) Overview
+
+In the four non-FAS modes, yumi uses the **CPU Load Governor (CLG)** to replace the kernel's native governor. CLG performs adaptive frequency scaling based on real CPU utilization data collected via eBPF, using EMA smoothing, up/down rate limiting, and a headroom factor. Each mode can independently configure CLG parameters (up/down thresholds, smoothing coefficients, performance floor/ceiling, etc.).
+
+When the screen is off, the system automatically enters **Doze mode**, where CLG is reconfigured with extreme power-saving parameters (performance ceiling locked to 40%, extremely sluggish frequency ramp-up, instant ramp-down), dramatically reducing standby power consumption.
 
 ## 🌐 WebUI Management Interface
 
 yumi includes a lightweight built-in WebUI. All management operations can be performed through a browser — no extra app installation needed.
 
-  * **Mode Switching** - Switch performance modes in real time.
-  * **App Rule Management** - Configure dedicated performance strategies for different apps.
-  * **Configuration Editing** - Edit YAML configuration files online.
-  * **Log Viewer** - View yumi daemon logs in real time.
+  * **Mode Switching** — Switch performance modes in real time.
+  * **App Rule Management** — Configure dedicated performance strategies for different apps.
+  * **Configuration Editing** — Edit YAML configuration files online.
+  * **Log Viewer** — View yumi daemon logs in real time.
 
 -----
 
 ### 🛠️ Scheduling Core (yumi)
 
-The core of yumi is driven by a Rust daemon, **yumi**. It is responsible for executing all low-level system tuning commands, achieving efficient performance control with extremely low resource consumption.
+The core of yumi is driven by a Rust daemon, **yumi**. It uses eBPF kernel probes for zero-overhead data collection, achieving efficient performance control with extremely low resource consumption.
 
 #### Core Features
 
   * **High-Performance Rust Implementation**: Extremely low system resource usage and minimal power consumption.
-  * **Real-time Configuration Monitoring**: Supports hot-reloading for configuration (`config.yaml`) and mode (`mode.txt`) files, allowing mode switches without a reboot.
-  * **Multi-level Optimization Strategy**: Comprehensive tuning from CPU frequency to I/O scheduling.
-  * **Smart App Launch Boost**: Monitors `top-app` cgroup changes to provide a temporary performance boost during app launch, speeding up loading times.
-  * **Built-in FAS Engine**: Frame-aware scheduling with per-frame dynamic frequency scaling — no external modules required.
+  * **eBPF Kernel-Level Monitoring**: Precisely collects per-core CPU utilization and thread runtime via `sched_switch` tracepoint; captures rendering frame intervals with zero overhead via `queueBuffer` uprobe.
+  * **Real-time Configuration Monitoring**: Supports hot-reloading for `config.yaml` and `rules.yaml`, allowing mode switches without a reboot.
+  * **Built-in FAS Engine**: PID controller-driven frame-aware scheduling with automatic capacity weight detection, per-app configuration, and CPU utilization-assisted frequency scaling.
+  * **CLG Load Governor**: Adaptive frequency scaling based on real-time eBPF load data, replacing the kernel's native governor.
+  * **Multi-Language Internationalization**: Fluent-based i18n system supporting Chinese and English log output.
 
-#### Scheduling Functions
+#### Feature Modules
 
 | Feature Module | Description |
 | :--- | :--- |
-| **CPU Frequency Control** | Dynamically adjusts the min/max frequency for each core cluster. |
-| **FAS Frame-Aware Scheduling** | Built-in frame time analysis engine that monitors real-time frame intervals and maps them to CPU frequency via `perf_index`, enabling per-frame dynamic frequency scaling. |
-| **Governor Management** | Supports fine-grained tuning of various governors like schedutil, walt, and their internal parameters. |
-| **Core Allocation (Cpuset)** | Assigns appropriate CPU cores to different task groups (foreground, background, etc.), key for managing power and performance. |
+| **eBPF CPU Monitor** | Collects per-core idle/busy time and thread runtime via `sched_switch` tracepoint, with real-time state compensation (compensating for tasks currently executing but not yet triggering a context switch). |
+| **eBPF FPS Monitor** | Captures frame submission events via `queueBuffer` uprobe, with kernel-side PID filtering and zero-copy perf event transport to userspace. |
+| **FAS Frame-Aware Scheduling** | PID controller-driven; analyzes frame intervals in real time and maps them to CPU frequency via perf_index (0.0–1.0) for per-frame dynamic frequency scaling. |
+| **CLG Load Governor** | Adaptive frequency scaling based on real-time eBPF load data, with independent per-cluster control and up/down rate limiting. |
+| **CPU Frequency Control** | FastWriter high-performance sysfs writer with deduplication, unmount, and frequency verification; locked-frequency writes to each core cluster. |
+| **Auto Capacity Weight** | Runtime detection of each core cluster's `cpu_capacity` to automatically compute capacity_weight — no manual core architecture configuration needed. |
+| **Smart Screen-Off Power Saving** | Auto-enters Doze mode when screen is off with CLG forced into extreme power-saving configuration; auto-restores on screen on. |
+| **Temperature-Aware Throttling** | Real-time CPU temperature monitoring; limits FAS performance ceiling when threshold is exceeded. |
 | **I/O Scheduler Optimization** | Iterates over all block devices with customizable I/O schedulers, read-ahead size, merge policy, and iostats parameters. |
-| **EAS Scheduler Tuning** | Advanced parameter optimization for kernels that support Energy Aware Scheduling (EAS). |
-| **Core Binding Optimization (AffinitySetter)** | Automatically creates `yumi` and `Rubbish` cgroups. Binds critical system processes (e.g., `surfaceflinger`) to the `yumi` group and isolates interfering processes (e.g., `kswapd0`, `logcat`) to the `Rubbish` group, significantly improving UI smoothness. |
-| **Conflict Management** | Automatically disables most common userspace and kernel-level performance boosters (like FEAS, except in Fast mode) to ensure the scheduler's policy is the single source of truth. |
+| **Screen State Detection** | Monitors power/backlight events via Netlink uevent — zero-polling screen on/off detection. |
+| **Foreground App Detection** | Reads `top-app` cgroup process list with non-blocking debounce; automatically filters IMEs and system processes. |
 
 -----
 
 ### 🎯 FAS Frame-Aware Scheduling — In Depth
 
-FAS (Frame Aware Scheduling) is yumi's built-in frame-aware dynamic frequency scaling engine, designed specifically for gaming scenarios. Unlike traditional static modes, FAS precisely controls CPU frequency by analyzing the rendering time of every frame in real time, minimizing power consumption while ensuring smoothness.
+FAS (Frame Aware Scheduling) is yumi's built-in frame-aware dynamic frequency scaling engine, designed specifically for gaming scenarios. Unlike traditional static modes, FAS precisely controls CPU frequency through a PID controller that analyzes the rendering time of every frame in real time, minimizing power consumption while ensuring smoothness.
 
 #### How It Works
 
-The FAS engine maintains a **perf_index** (performance index, range 0–1000) and adjusts it based on real-time frame time feedback:
+The FAS engine maintains a **perf_index** (performance index, range 0.0–1.0) and adjusts it via a PID controller based on real-time frame time feedback:
 
-  * **Frame time exceeds budget** → perf_index rises → CPU frequency increases
-  * **Frame time meets budget** → perf_index slowly falls → CPU frequency decreases
-  * **perf_index is mapped to actual frequency steps for each core cluster via linear interpolation**
+  * **Frame time exceeds budget** → PID output is negative → perf_index rises → CPU frequency increases
+  * **Frame time meets budget** → PID output is positive → perf_index slowly falls → CPU frequency decreases
+  * **perf_index is mapped to actual frequency steps for each core cluster via capacity_weight**
+
+The PID controller uses three configurable coefficients (kp, ki, kd) to control proportional, integral, and derivative responses respectively. The integral term features a leak mechanism to prevent saturation, and the derivative term uses low-pass filtering to suppress noise.
 
 #### Core Mechanisms
 
-  * **Automatic Frame Rate Gear Switching**: Supports multiple frame rate targets (e.g., 30/60/90/120/144 fps) with automatic up/downshift based on actual rendering capability. Before downshifting, the engine first attempts a frequency boost to confirm whether a downshift is truly necessary, preventing false downshifts.
-  * **Loading Scene Detection**: Automatically identifies game loading screens (sustained heavy frames). Upon entering loading state, it locks to mid-to-high frequencies and resumes normal scheduling with protection after loading ends. Supports both hard loading (true heavy frames) and soft loading (sudden frame rate drop without reaching the heavy-frame threshold).
-  * **Scene Transition Awareness**: Detects scene transitions (e.g., map changes) using the coefficient of variation of frame times. During transitions, frequency adjustment amplitude is reduced to prevent severe fluctuations.
+  * **Automatic Frame Rate Gear Switching**: Supports multiple frame rate targets (e.g., 30/60/90/120/144 fps) with automatic up/downshift based on actual rendering capability. Before downshifting, the engine first attempts a boost to confirm whether a downshift is truly necessary, preventing false downshifts. Supports low-perf stable-framerate upgrades and extreme framerate native gear detection.
+  * **CPU Load-Assisted Frequency Scaling**: Uses the foreground heaviest thread utilization collected via eBPF (EMA-smoothed) to apply a util_cap soft ceiling on perf_index, preventing frequency from running high with no actual load.
+  * **Auto Capacity Weight Detection**: Reads each core cluster's `cpu_capacity` at runtime and automatically computes capacity_weight (higher weight for big cores) — no manual core architecture configuration needed.
+  * **Per-App Configuration**: Supports individual frame rate gear lists and frame rate margins for each game, with runtime dynamic matching to the nearest gear.
+  * **Loading Scene Detection**: Automatically identifies game loading screens (sustained heavy frames). Upon entering loading state, it locks to mid-to-high frequencies and resumes normal scheduling with protection after loading ends.
   * **Frequency Hysteresis**: Hysteresis bands are set between adjacent frequency steps to prevent rapid toggling at boundaries.
-  * **Jank Cooldown**: After a severe frame drop, the engine enters a cooldown period during which it maintains a higher frequency to avoid triggering a chain of stutters by immediately reducing frequency.
-  * **External Lock Detection**: Detects whether the frequency has been overridden by external factors (e.g., thermal throttling). If a persistent mismatch is detected, it temporarily backs off and yields control, automatically recovering after the cooldown period.
-  * **Windowed Mode Support**: The FAS state supports suspend/resume. After a brief interruption (e.g., windowed mode operation), scheduling can resume quickly without re-initialization.
+  * **Jank Cooldown**: After a severe frame drop, the engine enters a cooldown period during which it maintains a higher frequency to avoid triggering a chain of stutters. Jank response intensity increases exponentially with consecutive drops.
+  * **Frequency Verification & Recovery**: Periodically reads back actual frequency to detect external overrides (e.g., thermal throttling), automatically unmounts and rewrites.
+  * **Windowed Mode Support**: FAS state supports suspend/resume (5-second grace period). After a brief interruption, scheduling can resume quickly without re-initialization.
+  * **perf_floor Deadlock Rescue**: Detects situations where perf_index is stuck at the floor for extended periods while frame rate is severely insufficient, automatically resetting to cold-boot performance level.
 
 #### FAS Configuration (`rules.yaml`)
 
@@ -115,28 +178,58 @@ FAS parameters are configured in the `fas_rules` section of `rules.yaml`:
 fas_rules:
   fps_gears: [30.0, 60.0, 90.0, 120.0, 144.0]
   fps_margin: "3.0"
+
+  pid:
+    kp: 0.050
+    ki: 0.010
+    kd: 0.006
+
+  auto_capacity_weight: true
+
+  perf_floor: 0.22
+  perf_ceil: 1.0
+  perf_init: 0.45
+  perf_cold_boot: 0.85
+  freq_hysteresis: 0.015
+
   heavy_frame_threshold_ms: 150.0
   loading_cumulative_ms: 2500.0
   post_loading_ignore_frames: 5
-  post_loading_perf_min: 500.0
-  post_loading_perf_max: 800.0
-  instant_error_threshold_ms: 4.0
-  perf_floor: 150.0
-  freq_hysteresis: 0.015
+  post_loading_perf: 0.65
+
+  core_temp_threshold: 0.0
+  core_temp_throttle_perf: 0.70
+  util_cap_divisor: 0.45
+
+  per_app_profiles:
+    "com.miHoYo.GenshinImpact":
+      target_fps: [30, 60]
+      fps_margin: 4.0
+    "com.tencent.tmgp.sgame":
+      target_fps: [60, 90, 120]
+      fps_margin: 3.0
 ```
+
+**Key Parameter Reference:**
 
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `fps_gears` | float[] | [20,24,30,45,60,90,120,144] | Supported frame rate gear list; FAS automatically switches between these levels. |
+| `fps_gears` | float[] | [30,60,90,120,144] | Supported frame rate gear list; FAS automatically switches between these levels. |
 | `fps_margin` | string | "3.0" | Frame rate margin (fps). EMA budget = 1000 / (target − margin), providing a tolerance buffer. |
+| `pid.kp / ki / kd` | float | 0.050/0.010/0.006 | PID controller proportional, integral, and derivative coefficients. |
+| `auto_capacity_weight` | bool | true | Whether to auto-detect core cluster capacity weights. When disabled, uses manually configured `cluster_profiles`. |
+| `perf_floor` | float | 0.22 | Minimum perf_index (dynamically raised for high-refresh games). |
+| `perf_ceil` | float | 1.0 | Maximum perf_index. |
+| `perf_init` | float | 0.45 | Initial perf_index on normal startup. |
+| `perf_cold_boot` | float | 0.85 | perf_index during cold boot period (first 3.5 seconds). |
+| `freq_hysteresis` | float | 0.015 | Frequency hysteresis coefficient, preventing frequent toggling between adjacent steps. |
 | `heavy_frame_threshold_ms` | float | 150.0 | Heavy frame threshold (ms). Frames exceeding this value are treated as loading frames. |
 | `loading_cumulative_ms` | float | 2500.0 | Enters loading state when cumulative heavy frame duration exceeds this value. |
-| `post_loading_ignore_frames` | int | 5 | Number of frames to ignore after loading ends, used to filter transition noise. |
-| `post_loading_perf_min` | float | 500.0 | Minimum perf_index after loading ends. |
-| `post_loading_perf_max` | float | 800.0 | Maximum perf_index after loading ends. |
-| `instant_error_threshold_ms` | float | 4.0 | Instantaneous error threshold. Triggers emergency frequency boost when frame time exceeds budget by more than this value. |
-| `perf_floor` | float | 150.0 | Minimum perf_index, preventing the frequency from dropping too low. |
-| `freq_hysteresis` | float | 0.015 | Frequency hysteresis coefficient, preventing frequent toggling between adjacent steps. |
+| `post_loading_perf` | float | 0.65 | perf_index after loading ends. |
+| `core_temp_threshold` | float | 0.0 | Temperature throttling threshold (°C). 0 = disabled. |
+| `core_temp_throttle_perf` | float | 0.70 | Performance ceiling during temperature throttling. |
+| `util_cap_divisor` | float | 0.45 | Divisor for CPU load-assisted frequency scaling (smaller = more aggressive throttling). |
+| `per_app_profiles` | map | {} | Per-game configuration, supporting `target_fps` and `fps_margin`. |
 
 -----
 
@@ -156,78 +249,25 @@ meta:
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `loglevel` | string | Log level detail. Options: `DEBUG`, `INFO`, `WARN`, `ERROR`. |
-| `language` | string | Daemon log language. Currently supports `en` (English) and `zh` (Chinese). |
+| `loglevel` | string | Log level detail. Options: `DEBUG`, `INFO`, `WARN`, `ERROR`. Supports runtime hot-update. |
+| `language` | string | Daemon log language. Currently supports `en` (English) and `zh` (Chinese). Supports runtime hot-switch. |
 
 #### 2️⃣ Function Toggles (`function`)
 
-This section contains the master switches for all major features.
-
 ```yaml
 function:
-  AffinitySetter: true
   CpuIdleScalingGovernor: false
-  EasScheduler: true
-  cpuset: true
-  LoadBalancing: true
-  EnableFeas: false
   IOOptimization: true
-  AppLaunchBoost: true
 ```
 
 | Function | Description |
 | :--- | :--- |
-| `AffinitySetter` | **(Recommended)** **Do not enable on HyperOS 3**. Enables core binding optimization (`yumi` and `Rubbish` cgroups). |
 | `CpuIdleScalingGovernor`| Whether to allow custom CPU Idle governors (see `CpuIdle` section). |
-| `EasScheduler` | If the kernel supports **EAS**, enabling this will apply optimized parameters. |
-| `cpuset` | **(Recommended)** Enables the Cpuset feature to assign different task groups to appropriate CPU cores (see `Cpuset` section). |
-| `LoadBalancing` | Enables CFS load balancing optimizations for more rational task distribution across cores. |
-| `EnableFeas` | Whether to attempt enabling the kernel's FEAS feature in **Fast mode**. |
 | `IOOptimization` | Enables I/O optimization, iterating over all block devices to apply scheduler and parameter settings (see `IO_Settings` section). |
-| `AppLaunchBoost` | **(Recommended)** Enables app launch acceleration to speed up loading times (see `AppLaunchBoostSettings` section). |
 
-#### 3️⃣ App Launch Boost (`AppLaunchBoostSettings`)
+#### 3️⃣ I/O Settings (`IO_Settings`)
 
-Requires `function.AppLaunchBoost` to be `true`.
-
-```yaml
-AppLaunchBoostSettings:
-  BoostRateMs: 600
-  SmallCoreBoostFreq: "max"
-  MediumCoreBoostFreq: "max"
-  BigCoreBoostFreq: "max"
-  SuperBigCoreBoostFreq: "max"
-```
-
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `BoostRateMs` | int | Duration of the launch boost (in milliseconds). |
-| `SmallCoreBoostFreq` | string/int | Boost frequency for small cores. Supports `"min"`, `"max"`, or a specific value. Leave empty for `"max"`. |
-| `MediumCoreBoostFreq` | string/int | Boost frequency for medium cores. Same as above. |
-| `BigCoreBoostFreq` | string/int | Boost frequency for big cores. Same as above. |
-| `SuperBigCoreBoostFreq` | string/int | Boost frequency for super-big cores. Same as above. |
-
-#### 4️⃣ Core Framework & Allocation (`CoreFramework` & `CoreAllocation`)
-
-This section defines your device's physical core architecture and is the foundation for all frequency and core control functions. **It must be configured correctly!**
-
-  * **Core Framework (`CoreFramework`)**: Tells the program which `policy` path corresponds to each core cluster (can be found in the `/sys/devices/system/cpu/cpufreq/` directory). Set to `-1` if the core cluster does not exist.
-    ```yaml
-    CoreFramework:
-      SmallCorePath: 0
-      MediumCorePath: 2
-      BigCorePath: 5
-      SuperBigCorePath: 7
-    ```
-  * **Core Allocation (`CoreAllocation`)**: Provides parameters for the `AffinitySetter` feature, specifying the core range to which critical system processes (`yumi` cgroup) will be bound.
-    ```yaml
-    CoreAllocation:
-      CpuSetCore: "2-7"
-    ```
-
-#### 5️⃣ I/O Settings (`IO_Settings`)
-
-Requires `function.IOOptimization` to be `true`. When enabled, iterates over all block devices under `/sys/block/*` and applies the following parameters to each (paths are checked automatically).
+Requires `function.IOOptimization` to be `true`. When enabled, iterates over all block devices under `/sys/block/*` and applies the following parameters.
 
 ```yaml
 IO_Settings:
@@ -244,18 +284,7 @@ IO_Settings:
 | `nomerges` | string | Merge policy. `0` = allow merges, `1` = simple merges only, `2` = disable merges. |
 | `iostats` | string | I/O statistics. `0` = disable (recommended, reduces overhead), `1` = enable. |
 
-#### 6️⃣ CFS Scheduler Parameters (`CompletelyFairSchedulerValue`)
-
-```yaml
-CompletelyFairSchedulerValue:
-  sched_child_runs_first: ""
-  sched_rt_period_us: ""
-  sched_rt_runtime_us: ""
-```
-
-Fields left empty will not be written and will retain their system default values.
-
-#### 7️⃣ CPU Idle (`CpuIdle`)
+#### 4️⃣ CPU Idle (`CpuIdle`)
 
 Requires `function.CpuIdleScalingGovernor` to be `true`.
 
@@ -266,123 +295,93 @@ CpuIdle:
 
   * `current_governor`: Sets the CPU Idle governor.
 
-#### 8️⃣ Cpuset (Core Grouping)
+#### 5️⃣ Performance Mode Configuration
 
-Requires `function.cpuset` to be `true`. This restricts different types of task groups to run on specified CPU cores.
-
-```yaml
-Cpuset:
-  top_app: "0-7"
-  foreground: "0-7"
-  background: "0-3"
-  system_background: "0-2"
-  restricted: "0-1"
-```
-
-| Field | Description | Recommended Value |
-| :--- | :--- | :--- |
-| `top_app` | The application currently running in the foreground. | Should be assigned all cores, e.g., `"0-7"`. |
-| `foreground` | Foreground services and visible applications. | Should also be assigned all or most cores. |
-| `background` | Applications and services running in the background. | **Should be restricted to efficiency cores**, e.g., `"0-3"`, to save power. |
-| `system_background` | System background services. | Should also be restricted to efficiency cores. |
-| `restricted` | Background apps that are restricted by the system. | Should be assigned the minimum number of cores. |
-
-#### 9️⃣ Dynamic Governor Parameters (`pGovPath` & `Govsets`)
-
-This feature allows for fine-tuning the internal parameters of the CPU governor. This is a two-step process:
-
-1.  **Define Available Parameters (`pGovPath`)**: Create a "parameter dictionary," grouped by **governor name**, defining the **pure file names** of all parameters you might want to use.
-    ```yaml
-    pGovPath:
-      schedutil:
-        path1: "up_rate_limit_us"
-      walt:
-        path1: "target_loads"
-    ```
-2.  **Set Parameter Values in Modes (`Govsets`)**: Within **each performance mode**, also grouped by **governor name**, use the **keys** defined in `pGovPath` to set specific **values**. The program will intelligently apply these settings only to the cores currently using that governor.
-    ```yaml
-    # performance mode example
-    performance:
-      Govsets:
-        schedutil:
-          path1:
-            SmallCore: "0"
-            MediumCore: "500"
-            BigCore: "0"
-            SuperBigCore: "0"
-    ```
-
-#### 🔟 Power Model Explained (using `performance` mode as an example)
-
-A complete performance mode is defined by the combination of the following **five modules**. You can mix and match them freely to create the perfect mode for your needs.
+Each performance mode can independently configure CPU Load Governor (CLG) parameters:
 
 ```yaml
-performance:
-  Governor: { ... } # Governor: Determines how CPU frequency responds to load
-  Freq: { ... }     # CPU Frequency: Defines min/max frequency for each core cluster
-  Uclamp: { ... }   # Uclamp: Provides hints to the scheduler about performance needs (0-100)
-  Govsets: { ... }  # Governor Parameters: Fine-tunes the behavior of the current governor
-  Other: { ... }    # Other settings
+balance:
+  CpuLoadGovernor:
+    up_threshold: 0.80
+    down_threshold: 0.50
+    smoothing_up: 0.60
+    smoothing_down: 0.30
+    down_rate_limit_ticks: 3
+    headroom_factor: 1.25
+    perf_floor: 0.15
+    perf_ceil: 1.0
+    perf_init: 0.50
 ```
 
-**Detailed Explanation:**
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `up_threshold` | float | 0.80 | Ramps up frequency quickly when load exceeds this threshold. |
+| `down_threshold` | float | 0.50 | Allows frequency ramp-down when load drops below this threshold. |
+| `smoothing_up` | float | 0.60 | Ramp-up smoothing coefficient (larger = faster). |
+| `smoothing_down` | float | 0.30 | Ramp-down smoothing coefficient (larger = faster). |
+| `down_rate_limit_ticks` | int | 3 | Ramp-down rate limit (in ticks, each tick = 200ms). |
+| `headroom_factor` | float | 1.25 | Target perf = actual load × headroom, providing frequency margin. |
+| `perf_floor` | float | 0.15 | Performance floor. |
+| `perf_ceil` | float | 1.0 | Performance ceiling. |
+| `perf_init` | float | 0.50 | Initial performance value. |
 
-  * **`Governor` (Governor)**:
-      * `Global`: "schedutil" (Global default)
-      * `SmallCore`: "" (Uses global if empty)
-      * ... (Other core clusters)
-  * **`Freq` (CPU Frequency)**:
-      * `SmallCoreMinFreq`: 0 (or "min")
-      * `SmallCoreMaxFreq`: 9999999 (or "max")
-      * ... (Other core clusters)
-      * **Note**: Frequency fields support `"min"` and `"max"` strings, which the daemon will convert to `0` and `9999999` respectively.
-  * **`Uclamp` (Uclamp Settings)**:
-      * `UclampTopAppMin`: "0"
-      * `UclampTopAppMax`: "100"
-      * `UclampTopApplatency_sensitive`: "0"
-      * `UclampForeGroundMin`: "0"
-      * `UclampForeGroundMax`: "70"
-      * `UclampBackGroundMin`: "0"
-      * `UclampBackGroundMax`: "50"
-  * **`Govsets` (Governor Parameters)**:
-      * (Structure as described above)
-  * **`Other` (Other Settings)**:
-      * `ufsClkGate`: false (Whether to disable UFS clock gating)
+-----
+
+### 📊 eBPF Probes — In Depth
+
+yumi uses two eBPF probes for kernel-level data collection:
+
+#### CPU Probe (`cpu_probe.c`)
+
+Attached to `tracepoint/sched/sched_switch`, triggered on every context switch, recording:
+
+  * **Per-core idle/busy time**: Accumulated via `PERCPU_ARRAY`; userspace reads and computes real utilization.
+  * **Per-core current TID**: Used by userspace to compensate in real time for tasks that haven't yet triggered a sched_switch.
+  * **Thread runtime**: Recorded per-thread cumulative CPU time via `HASH` map, used to compute the foreground app's heaviest thread utilization.
+
+#### FPS Probe (`fps_probe.c`)
+
+Attached to `libgui.so`'s `queueBuffer` function (uprobe), triggered on every frame submission:
+
+  * **Kernel-side PID filtering**: Only sends perf events for the target process via the `target_pid` map, reducing overhead from unrelated processes.
+  * **Frame interval calculation**: Records the timestamp delta between each `queueBuffer` call, transmitted to userspace via `PERF_EVENT_ARRAY` with zero-copy.
+  * **Baseline preheating**: Records timestamps even for non-target processes, ensuring the first frame after a PID switch can compute a correct delta.
+
+-----
 
 ## 📥 Installation Instructions
 
 ### Prerequisites
 
 1.  **Obtain Root Access**
+2.  **Ensure kernel supports eBPF** (most Android 10+ devices already support this)
 
 ### Installation Steps
 
-1.  **Download the Module** - Download the latest release from the [Releases](https://github.com/imacte/YukiCtrl/releases) page.
-2.  **Flash the Module** - Flash the yumi module via Magisk / KernelSU.
-3.  **Access the WebUI** - Once the module starts, open the WebUI in your browser to manage and configure settings.
-4.  **Configure Rules** - Set performance strategies for different apps as needed.
+1.  **Download the Module** — Download the latest release from the [Releases](https://github.com/imacte/yumi/releases) page.
+2.  **Flash the Module** — Flash the yumi module via Magisk / KernelSU.
+3.  **Access the WebUI** — Once the module starts, open the WebUI in your browser to manage and configure settings.
+4.  **Configure Rules** — Set performance strategies for different apps as needed.
 
 ## 🚀 Performance Optimization Suggestions
 
 ### Daily Use
 
-1.  **Use Balance Mode** - Provides the best performance/power balance for most apps.
-2.  **Set App Rules** - Set gaming apps to Performance or Fast mode.
+1.  **Use Balance Mode** — CLG adaptive frequency scaling provides the best performance/power balance for most apps.
+2.  **Set App Rules** — Assign FAS mode for gaming apps.
 
 ### Gaming Optimization
 
-1.  **Use FAS Mode** - Frame-aware scheduling automatically saves power while maintaining smoothness; recommended as the primary gaming mode.
-2.  **Adjust FAS Parameters** - Tune the frame rate gears and margin in `rules.yaml` based on the game's characteristics.
-3.  **Use Performance/Fast Mode** - For scenarios FAS cannot cover, switch to a static high-performance mode.
-4.  **Enable App Launch Boost** - Reduce game loading times.
-5.  **Monitor Temperature** - Pay attention to device temperature during extended high-performance sessions.
+1.  **Use FAS Mode** — Frame-aware scheduling automatically saves power while maintaining smoothness; recommended as the primary gaming mode.
+2.  **Configure Per-App Parameters** — Set `target_fps` and `fps_margin` for specific games in `rules.yaml`.
+3.  **Tune PID Coefficients** — If frequency response feels too fast or too slow, fine-tune `kp`/`ki`/`kd`.
+4.  **Monitor Temperature** — Set `core_temp_threshold` to enable thermal protection during extended gaming sessions.
 
 ### Power Saving Optimization
 
-1.  **Use Powersave Mode** - Maximize battery life in low-load scenarios.
-2.  **Restrict Background Apps** - Use `Cpuset` to limit CPU usage for background apps.
-3.  **Optimize I/O Scheduler** - Reduce power consumption from storage access.
-4.  **Disable Unneeded Features** - Turn off advanced features as needed to save power.
+1.  **Use Powersave Mode** — CLG with low performance ceiling maximizes battery life in low-load scenarios.
+2.  **Auto Screen-Off Savings** — No manual action needed; Doze mode activates automatically when the screen is off.
+3.  **Optimize I/O Scheduler** — Reduce power consumption from storage access.
 
 ## 🔍 Troubleshooting
 
@@ -394,43 +393,57 @@ performance:
   * Check your Root manager settings to ensure the yumi Root request has been granted.
   * Try reflashing the module or restarting the device.
 
+**Q: eBPF probes fail to load?**
+
+  * Ensure kernel supports eBPF (`CONFIG_BPF=y`, `CONFIG_BPF_SYSCALL=y`).
+  * Check the logs for eBPF error messages.
+  * Some older kernels may not support the required BPF features.
+
 **Q: Smart Dynamic Mode isn't working?**
 
   * Verify that app rules are configured correctly.
   * Verify that the yumi module is installed and running correctly.
+  * Check whether `ignored_apps` list accidentally excludes the target app.
 
 **Q: Performance modes aren't switching?**
 
   * Verify that the yumi module is installed and running correctly.
   * View the yumi module logs to identify specific error messages.
-  * Verify the configuration file format is correct (`config.yaml` is case-sensitive).
+  * Verify the configuration file format is correct (YAML syntax sensitive).
 
 **Q: Frame rate is unstable in FAS mode?**
 
   * Check that `fps_gears` in `rules.yaml` includes the target frame rate.
   * Increasing `fps_margin` provides more headroom and reduces boundary fluctuations.
   * Check the FAS heartbeat entries in the logs (output every 30 frames) to confirm the scheduling state is normal.
-  * If the frequency is being overridden by thermal throttling, an "externally locked" message will appear in the logs — this is normal backoff behavior.
+  * If the frequency is being overridden by thermal throttling, a "freq mismatch" message will appear in the logs — this is normal verification and recovery behavior.
+  * Try configuring dedicated parameters for the game in `per_app_profiles`.
+
+**Q: CPU utilization data seems inaccurate?**
+
+  * The eBPF CPU probe requires kernel support for `tracepoint/sched/sched_switch`.
+  * Userspace read cycle is 200ms, with real-time state compensation to improve accuracy.
+  * Check the cpu_monitor initialization info in the logs to confirm the online core list is correct.
 
 ## 📊 Project Statistics
 
 <div align="center">
 
-[![Star History Chart](https://api.star-history.com/svg?repos=imacte/YukiCtrl&type=Date)](https://star-history.com/#imacte/YukiCtrl&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=imacte/yumi&type=Date)](https://star-history.com/#imacte/yumi&Date)
 
 </div>
 
 ## 📮 Contact Us
 
-  * **GitHub Issues** - [For project issues and suggestions](https://github.com/imacte/YukiCtrl/issues)
-  * **QQ Group** - 1036909137
-  * **Telegram** - [Join TG Channel](https://t.me/+gp4adLJAsXYzMjc1)
+  * **GitHub Issues** — [For project issues and suggestions](https://github.com/imacte/yumi/issues)
+  * **QQ Group** — 1036909137
+  * **Telegram** — [Join TG Channel](https://t.me/+gp4adLJAsXYzMjc1)
 
 -----
 
 <div align="center">
 
-<sub>📅 Document Updated: February 25, 2026</sub><br>
-<sub>🚀 yumi - Giving every Android device the best performance experience</sub>
+<sub>📅 Document Updated: March 11, 2026</sub><br>
+<sub>🚀 yumi — Giving every Android device the best performance experience</sub>
 
 </div>

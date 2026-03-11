@@ -292,7 +292,9 @@ impl FpsWindow {
         self.sq_sum += fps * fps;
         self.pos = (self.pos + 1) % WINDOW_SIZE;
         self.push_count += 1;
-        if self.push_count >= 512 {
+        // 从 512 降低到 64 帧校准一次，WINDOW_SIZE=120 下每半圈重算一次
+        // 在 144fps 下约 0.44 秒校准一次，有效抑制浮点累积误差对齿轮决策的影响
+        if self.push_count >= 64 {
             self.recalculate();
             self.push_count = 0;
         }
@@ -352,16 +354,20 @@ impl PidController {
     }
 
     fn compute(&mut self, error: f32, inst_error: f32, norm: f32) -> f32 {
+        // 对 norm 做完整的安全区间限制，防止极端 target_fps 值导致
+        // integral 积分、leak 系数、微分除法出现异常数值
+        let safe_norm = norm.clamp(0.5, 2.5);
+
         if error < 0.0 {
-            self.integral += error * norm;
+            self.integral += error * safe_norm;
         } else {
-            let leak = (0.70 + norm * 0.08).clamp(0.70, 0.85);
+            let leak = (0.70 + safe_norm * 0.08).clamp(0.70, 0.85);
             self.integral *= leak;
         }
-        let dyn_limit = self.integral_limit * norm.clamp(0.7, 1.3);
+        let dyn_limit = self.integral_limit * safe_norm.clamp(0.7, 1.3);
         self.integral = self.integral.clamp(-dyn_limit, dyn_limit);
 
-        let raw_deriv = (error - self.prev_error) / norm.max(0.01);
+        let raw_deriv = (error - self.prev_error) / safe_norm;
         self.filtered_deriv = self.filtered_deriv * 0.7 + raw_deriv * 0.3;
         self.prev_error = error;
 
@@ -990,6 +996,17 @@ impl FasController {
                 "/sys/devices/system/cpu/cpufreq/policy{}/scaling_max_freq", pid));
             let mut nw = FastWriter::new(format!(
                 "/sys/devices/system/cpu/cpufreq/policy{}/scaling_min_freq", pid));
+
+            // 检查 FastWriter 是否成功打开文件，跳过无效的 policy
+            if !mw.is_valid() || !nw.is_valid() {
+                warn!("{}", t_with_args("fas-policy-writer-invalid", &fluent_args!(
+                    "pid" => pid.to_string(),
+                    "max_valid" => mw.is_valid().to_string(),
+                    "min_valid" => nw.is_valid().to_string()
+                )));
+                continue;
+            }
+
             mw.write_value_force(max_f);
             nw.write_value_force(max_f);
 

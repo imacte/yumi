@@ -100,6 +100,7 @@ clg-deactivated = [CLG] CPU 负载调频器已停用
 clg-config-reloaded = [CLG] 配置已热重载 | 升频={ $up } 降频={ $down } 地板={ $floor } 天花板={ $ceil }
 clg-tick-log = [CLG] P{ $pid } 利用率={ $util }% perf={ $perf } 频率={ $freq }kHz{ $boost }
 clg-resync-boost = [CLG] P{ $pid } 加速后重同步: perf={ $perf } -> 频率={ $freq }kHz
+clg-writer-invalid = [CLG] P{ $pid } sysfs 写入器无效 (max_valid: { $max_valid }, min_valid: { $min_valid })，已跳过。
 
 # --- FAS ---
 fas-open-failed = [FAS] 无法打开 { $path }: { $error }
@@ -126,6 +127,7 @@ fas-no-profile = [FAS] 未找到 '{ $pkg }' 的专属配置，使用全局档位
 fas-ignore-write = [FAS] P{ $pid } 忽略写入 = { $ignore }
 fas-pid-reloaded = [FAS] PID 系数热重载: Kp={ $kp } Ki={ $ki } Kd={ $kd }
 fas-rules-reloaded = [FAS] 规则已热重载 (冗余={ $margin }, 地板={ $floor }, 天花板={ $ceil }, 配置数={ $profiles })
+fas-policy-writer-invalid = [FAS] P{ $pid } 策略写入器无效 (max_valid: { $max_valid }, min_valid: { $min_valid })，已跳过。
 
 # --- Scheduler: Boost ---
 boost-active-defer-config-apply = [Boost] 加速生效中，延迟应用配置变更

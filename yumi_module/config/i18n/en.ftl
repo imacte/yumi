@@ -102,6 +102,7 @@ clg-deactivated = [CLG] CPU Load Governor deactivated
 clg-config-reloaded = [CLG] config hot-reloaded | up={ $up } down={ $down } floor={ $floor } ceil={ $ceil }
 clg-tick-log = [CLG] P{ $pid } util={ $util }% perf={ $perf } freq={ $freq }kHz{ $boost }
 clg-resync-boost = [CLG] P{ $pid } resync after boost: perf={ $perf } -> freq={ $freq }kHz
+clg-writer-invalid = [CLG] P{ $pid } sysfs writer invalid (max_valid: { $max_valid }, min_valid: { $min_valid }), skipping.
 
 # --- FAS ---
 fas-open-failed = [FAS] failed to open { $path }: { $error }
@@ -128,6 +129,7 @@ fas-no-profile = [FAS] no per-app profile for '{ $pkg }', using global gears { $
 fas-ignore-write = [FAS] P{ $pid } ignore_write = { $ignore }
 fas-pid-reloaded = [FAS] PID coefficients hot-reloaded: Kp={ $kp } Ki={ $ki } Kd={ $kd }
 fas-rules-reloaded = [FAS] rules hot-reloaded (margin={ $margin }, floor={ $floor }, ceil={ $ceil }, profiles={ $profiles })
+fas-policy-writer-invalid = [FAS] P{ $pid } policy writer invalid (max_valid: { $max_valid }, min_valid: { $min_valid }), skipping.
 
 # --- Scheduler: Boost ---
 boost-active-defer-config-apply = [Boost] Boost active, deferring config apply.

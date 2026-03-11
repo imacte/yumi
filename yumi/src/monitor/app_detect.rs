@@ -252,6 +252,8 @@ pub fn app_detection_loop(
             if current_screen_state {
                 last_package.clear();
                 pending_package.clear();
+                last_mode.clear();
+                force_refresh_arc.store(true, Ordering::SeqCst);
             }
         }
 

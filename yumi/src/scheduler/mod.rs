@@ -200,7 +200,7 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
                                 else { cpu_governor.release(); }
                             } else {
                                 cpu_governor.release(); 
-                                // FAS 在这里无需特殊处理，随后 app_detect 会发来新的 ModeChange 唤醒它
+                                *mode_clone.lock().unwrap() = String::new();
                             }
                         }
                     },

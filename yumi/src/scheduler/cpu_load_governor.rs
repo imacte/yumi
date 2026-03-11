@@ -140,6 +140,15 @@ impl CpuLoadGovernor {
             let min_writer = FastWriter::new(format!(
                 "/sys/devices/system/cpu/cpufreq/policy{}/scaling_min_freq", pid));
 
+            if !max_writer.is_valid() || !min_writer.is_valid() {
+                warn!("{}", t_with_args("clg-writer-invalid", &fluent_args!(
+                    "pid" => pid.to_string(),
+                    "max_valid" => max_writer.is_valid().to_string(),
+                    "min_valid" => min_writer.is_valid().to_string()
+                )));
+                continue;
+            }
+
             let init_perf = self.cfg.perf_init.clamp(self.cfg.perf_floor, self.cfg.perf_ceil);
             let mut cluster = ClusterState {
                 policy_id: pid,
@@ -202,6 +211,8 @@ impl CpuLoadGovernor {
             let old_perf = cluster.current_perf;
 
             if target_perf > old_perf {
+                cluster.down_wait = 0;
+
                 let is_high_load = util >= self.cfg.up_threshold; 
                 let is_significant_jump = target_perf > old_perf + 0.20; 
 

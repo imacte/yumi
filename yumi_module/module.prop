@@ -1,7 +1,7 @@
 id=yumi
 name=yumi
-version=v1.0.1
-versionCode=10001
+version=v1.0.2
+versionCode=10002
 author=yuki
 description= yumi
 updateJson=https://raw.githubusercontent.com/imacte/yumi/main/updateInformation/update.json
