@@ -1,7 +1,7 @@
-# 🚀 更新日志 | Changelog
+## 更新日志 / Changelog
 
-#### 中文
-- 🔧 **修复**：解决了在 `FAS 模式` 下，前台 CPU 利用率显示为 `0` 的异常问题。
-
-#### English
-- 🔧 **Fix**: Resolved a bug where foreground CPU utilization would drop to `0` while in `FAS mode`.
+### 优化 (Optimizations)
+* **[代码重构]** 优化了底层代码结构，有效避免日志输出混淆的问题。
+  **[Refactor]** Optimized the core code structure to prevent log output confusion/overlap.
+* **[性能提升]** 优化了频率写入相关代码，提升运行逻辑的稳定性。
+  **[Performance]** Optimized the logic for frequency writing to improve efficiency.

@@ -17,11 +17,14 @@
 
 use anyhow::{Result};
 use log;
-use std::fs::{self, File};
-use std::io::Read;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write, Seek, SeekFrom};
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use nix::unistd::{access, AccessFlags};
+
+use crate::i18n::t_with_args;
+use crate::fluent_args;
 
 /// 向文件写入内容，并处理可能的错误
 pub fn write_to_file<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, content: C) -> Result<()> {
@@ -178,5 +181,100 @@ impl SysPathExist {
 
     fn path_exists(path: &str) -> bool {
         access(path, AccessFlags::F_OK).is_ok()
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  FastWriter — 带去重 + unmount 的 sysfs 写入器
+// ════════════════════════════════════════════════════════════════
+
+pub struct FastWriter {
+    file: Option<File>,
+    last_value: Option<u32>,
+    buf: [u8; 20],
+    path: PathBuf,
+}
+
+impl FastWriter {
+    pub fn new<P: AsRef<Path>>(path: P) -> Self {
+        let path_ref = path.as_ref();
+        Self::try_unmount(path_ref);
+        let _ = enable_perm(path_ref);
+        let file = OpenOptions::new().write(true).open(path_ref)
+            .map_err(|e| log::error!("{}", t_with_args("sysfs-open-failed", &fluent_args!("path" => path_ref.display().to_string(), "error" => e.to_string()))))
+            .ok();
+        Self { file, last_value: None, buf: [0u8; 20], path: path_ref.to_path_buf() }
+    }
+
+    fn try_unmount(path: &Path) {
+        if let Some(path_str) = path.to_str() {
+            if let Ok(cpath) = std::ffi::CString::new(path_str) {
+                let ret = unsafe { libc::umount2(cpath.as_ptr(), libc::MNT_DETACH) };
+                if ret != 0 {
+                    let errno = std::io::Error::last_os_error();
+                    if errno.raw_os_error() != Some(libc::EINVAL)
+                        && errno.raw_os_error() != Some(libc::ENOENT) {
+                        log::debug!("{}", t_with_args("sysfs-umount2-failed", &fluent_args!("path" => path_str, "error" => errno.to_string())));
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn re_unmount(&self) { Self::try_unmount(&self.path); }
+
+    #[allow(dead_code)]
+    pub fn write_value(&mut self, value: u32) -> bool {
+        if self.last_value == Some(value) { return true; }
+        self.do_write(value)
+    }
+
+    pub fn write_value_force(&mut self, value: u32) -> bool {
+        self.do_write(value)
+    }
+
+    pub fn invalidate(&mut self) { self.last_value = None; }
+    pub fn is_valid(&self) -> bool { self.file.is_some() }
+
+    fn do_write(&mut self, value: u32) -> bool {
+        if let Some(file) = &mut self.file {
+            let len = Self::u32_to_buf(value, &mut self.buf);
+            let _ = file.seek(SeekFrom::Start(0));
+            match file.write_all(&self.buf[..len]) {
+                Ok(()) => {
+                    self.last_value = Some(value);
+                    true
+                }
+                Err(e) => {
+                    // EINVAL(22): 内核拒绝该频率 (热限频 / 范围收窄)
+                    // EBUSY(16): sysfs 节点短暂被占用
+                    // 两者均为预期内的瞬态错误，降级为 debug 并且不缓存，下次 tick 自动重试
+                    match e.raw_os_error() {
+                        Some(libc::EINVAL) | Some(libc::EBUSY) => {
+                            log::debug!("write freq {} to {:?} skipped: {}", value, self.path, e);
+                        }
+                        _ => {
+                            log::warn!("{}", t_with_args("sysfs-write-freq-failed",
+                                &fluent_args!("freq" => value.to_string(), "error" => e.to_string())));
+                        }
+                    }
+                    // 写入失败不更新 last_value，确保下次 tick 会重试
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    }
+
+    fn u32_to_buf(mut v: u32, buf: &mut [u8; 20]) -> usize {
+        if v == 0 { buf[0] = b'0'; buf[1] = b'\n'; return 2; }
+        let mut pos = 18;
+        while v > 0 { buf[pos] = b'0' + (v % 10) as u8; v /= 10; pos -= 1; }
+        let start = pos + 1;
+        let digit_len = 19 - start;
+        buf.copy_within(start..19, 0);
+        buf[digit_len] = b'\n';
+        digit_len + 1
     }
 }

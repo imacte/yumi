@@ -17,7 +17,7 @@
 
 
 use crate::scheduler::config::CpuLoadGovernorConfig;
-use super::fas::FastWriter;
+use crate::utils::FastWriter;
 use log::{info, debug, warn};
 use std::fs;
 
@@ -60,14 +60,21 @@ impl ClusterState {
 
     fn write_freq(&mut self, freq: u32) {
         if freq == self.current_freq { return; }
-        if freq >= self.current_freq {
-            self.max_writer.write_value_force(freq);
-            self.min_writer.write_value_force(freq);
+        let ok = if freq >= self.current_freq {
+            // 升频：先拉高 max 再拉高 min
+            let ok_max = self.max_writer.write_value_force(freq);
+            let ok_min = self.min_writer.write_value_force(freq);
+            ok_max && ok_min
         } else {
-            self.min_writer.write_value_force(freq);
-            self.max_writer.write_value_force(freq);
+            // 降频：先降 min 再降 max
+            let ok_min = self.min_writer.write_value_force(freq);
+            let ok_max = self.max_writer.write_value_force(freq);
+            ok_max && ok_min
+        };
+        // 仅在两端均写入成功时更新缓存，失败则下次 tick 自动重试
+        if ok {
+            self.current_freq = freq;
         }
-        self.current_freq = freq;
     }
 
     fn max_util(&self, core_utils: &[f32]) -> f32 {
