@@ -1,0 +1,68 @@
+name: Build Yumi
+
+# 触发条件：当推送到 main 分支，或者发布 tag 时触发。
+# workflow_dispatch 允许在 GitHub 网页端手动点击运行。
+on:
+  push:
+    branches: [ "main" ]
+  tags:
+    - 'v*'
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and Package
+    # 使用最新的 Ubuntu 运行环境
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 拉取代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 
+
+      # 2. 配置 Node.js 环境 (用于编译 WebUI)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # 推荐使用 LTS 版本
+          
+      # 3. 安装 WebUI 依赖
+      - name: Install WebUI dependencies
+        working-directory: ./webui
+        run: npm install
+
+      # 4. 配置 Rust Nightly 环境并添加 Android 交叉编译目标
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: aarch64-linux-android
+          components: rust-src # build-std 需要用到
+
+      # 5. 安装 Android NDK
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r29
+
+      # 6. 配置 NDK 环境变量并安装 cargo-ndk
+      - name: Setup cargo-ndk
+        run: |
+          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+          cargo install cargo-ndk
+
+      # 7. 运行你的 xtask 构建脚本
+      - name: Run xtask build
+        run: cargo xtask build
+
+      # 8. 收集并上传构建产物 (Zip 包)
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yumi-release
+          # 指定 xtask 打包后输出的目录和文件规则
+          path: output/*.zip
