@@ -25,7 +25,7 @@ fn compile_bpf(src_name: &str, obj_name: &str, out_dir: &Path) -> std::path::Pat
             bpf_obj.to_str().unwrap(),
         ])
         .status()
-        .expect(&format!("无法执行 clang 编译 {}", src_name));
+        .unwrap_or_else(|_| panic!("无法执行 clang 编译 {}", src_name));
 
     if !status.success() {
         panic!("eBPF 编译失败: {}!", src_name);

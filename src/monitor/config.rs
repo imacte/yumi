@@ -112,7 +112,7 @@ pub struct PerAppProfile {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FasRulesConfig {
     #[serde(default = "default_fps_gears")]       pub fps_gears: Vec<f32>,
-    #[serde(default = "default_fps_margin")]       pub fps_margin: String,
+    #[serde(default = "default_fps_margin")]       pub fps_margin: f32,
     #[serde(default)]                              pub pid: PidCoefficients,
     #[serde(default = "default_cluster_profiles")] pub cluster_profiles: Vec<ClusterProfile>,
     #[serde(default = "d_auto_cap")]               pub auto_capacity_weight: bool,
@@ -182,7 +182,7 @@ pub struct FasRulesConfig {
 }
 
 pub fn default_fps_gears() -> Vec<f32> { vec![30.0, 60.0, 90.0, 120.0, 144.0] }
-pub fn default_fps_margin() -> String { "3".to_string() }
+pub fn default_fps_margin() -> f32 { 3.0 }
 fn d_auto_cap() -> bool { true }
 fn d_perf_floor() -> f32 { 0.22 }
 fn d_perf_ceil() -> f32 { 1.0 }

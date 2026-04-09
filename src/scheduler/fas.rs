@@ -806,7 +806,7 @@ impl FasController {
         self.core_utils.clear();
         self.target_fps_offset = 0.0;
         // 恢复全局 margin 和 gears
-        if let Ok(m) = self.cfg.fps_margin.parse::<f32>() { self.fps_margin = m; }
+        self.fps_margin = self.cfg.fps_margin;
         self.fps_gears = self.cfg.fps_gears.clone();
     }
 
@@ -900,11 +900,11 @@ impl FasController {
                 }
             } else {
                 // 无 per-app 配置，用全局 margin
-                if let Ok(m) = new_rules.fps_margin.parse::<f32>() { self.fps_margin = m; }
+                self.fps_margin = new_rules.fps_margin;
             }
             self.active_profile = profile;
         } else {
-            if let Ok(m) = new_rules.fps_margin.parse::<f32>() { self.fps_margin = m; }
+            self.fps_margin = new_rules.fps_margin;
         }
 
         // 齿轮列表变更
@@ -1008,7 +1008,7 @@ impl FasController {
         if !fas_rules.fps_gears.is_empty() {
             self.fps_gears = fas_rules.fps_gears.clone();
         }
-        if let Ok(m) = fas_rules.fps_margin.parse::<f32>() { self.fps_margin = m; }
+        self.fps_margin = fas_rules.fps_margin;
 
         let _ = crate::utils::write_to_file("/sys/module/perfmgr/parameters/perfmgr_enable", "0");
         let _ = crate::utils::write_to_file("/sys/module/mtk_fpsgo/parameters/perfmgr_enable", "0");

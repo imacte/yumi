@@ -1,3 +1,4 @@
-yumi/target
 yumi-*.zip
 /target
+*.bak
+output/

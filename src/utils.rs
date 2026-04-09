@@ -16,6 +16,7 @@
  */
 
 use anyhow::{Result};
+use inotify::{Inotify, WatchMask};
 use log;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write, Seek, SeekFrom};
@@ -72,17 +73,11 @@ pub fn enable_perm <P: AsRef<Path>>(path: P) -> Result<()> {
 
 /// 监控指定路径的文件/目录事件
 pub fn watch_path<P: AsRef<Path>>(path_to_watch: P) -> Result<()> {
-    use nix::sys::inotify::{AddWatchFlags, InitFlags, Inotify};
+    let mut inotify = Inotify::init()?;
+    inotify.watches().add(path_to_watch, WatchMask::CLOSE_WRITE)?;
     
-    let inotify = Inotify::init(InitFlags::empty())?;
-    inotify.add_watch(path_to_watch.as_ref(), AddWatchFlags::IN_CLOSE_WRITE)?;
-    
-    let _buffer = [0u8; 1024];
-    let _events = inotify.read_events()?;
-    
-    if !_events.is_empty() {
-        log::debug!("Detected change in {:?}, re-evaluating...", path_to_watch.as_ref());
-    }
+    let mut buffer = [0u8; 1024];
+    inotify.read_events_blocking(&mut buffer)?;
     Ok(())
 }
 
