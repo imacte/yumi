@@ -10,6 +10,8 @@ on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -28,7 +30,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20' # 推荐使用 LTS 版本
+          node-version: '24' # 推荐使用 LTS 版本
           
       # 3. 安装 WebUI 依赖
       - name: Install WebUI dependencies
