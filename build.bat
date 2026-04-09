@@ -29,6 +29,7 @@ rem Rust 项目文件夹名称
 set "PROJ_DIR=yumi"
 rem Magisk 模块模板文件夹名称
 set "MODULE_DIR=yumi_module"
+set "WEBUI_DIR=yumi-webui"
 rem 目标架构
 set "TARGET_ARCH=aarch64-linux-android"
 rem 生成的二进制文件名 (由 Cargo.toml 中的 [package] name 决定)
@@ -38,6 +39,8 @@ rem --- 路径计算 ---
 set "BINARY_SRC=%PROJ_DIR%\target\%TARGET_ARCH%\release\%BINARY_NAME%"
 set "TARGET_BIN_DIR=%MODULE_DIR%\core\bin"
 set "BINARY_DEST=%TARGET_BIN_DIR%\%BINARY_NAME%"
+set "WEBUI_DIST=%WEBUI_DIR%\dist"
+set "WEBROOT_DIR=%MODULE_DIR%\webroot"
 
 
 echo ========================================================
@@ -92,7 +95,45 @@ if exist "%STRIP_EXE_PATH%" (
 )
 echo.
 
-echo --- 5. 打包 Magisk 模块 (Zip) ---
+echo --- 5. 构建并同步 WebUI ---
+if exist "%WEBUI_DIR%" (
+    if not exist "%WEBROOT_DIR%" mkdir "%WEBROOT_DIR%"
+    pushd "%WEBUI_DIR%"
+    if not exist "node_modules" (
+        echo 正在执行 bun install...
+        bun install
+        if !ERRORLEVEL! neq 0 (
+            echo [ERROR] WebUI 依赖安装失败.
+            popd
+            exit /b !ERRORLEVEL!
+        )
+    )
+    echo 正在执行 bun run build...
+    bun run build
+    if !ERRORLEVEL! neq 0 (
+        echo [ERROR] WebUI 构建失败.
+        popd
+        exit /b !ERRORLEVEL!
+    )
+    popd
+    if exist "%WEBUI_DIST%" (
+        if exist "%WEBROOT_DIR%" rmdir /S /Q "%WEBROOT_DIR%"
+        mkdir "%WEBROOT_DIR%"
+        xcopy /E /I /Y "%WEBUI_DIST%\*" "%WEBROOT_DIR%\" > nul
+        if !ERRORLEVEL! neq 0 (
+            echo [ERROR] WebUI 同步到 webroot 失败.
+            exit /b !ERRORLEVEL!
+        )
+    ) else (
+        echo [ERROR] WebUI dist 目录不存在: %WEBUI_DIST%
+        exit /b 1
+    )
+) else (
+    echo [警告] 未找到 WebUI 目录，跳过 WebUI 构建: %WEBUI_DIR%
+)
+echo.
+
+echo --- 6. 打包 Magisk 模块 (Zip) ---
 if not exist "%ZIP_EXE_PATH%" (
     echo [ERROR] 未找到 7z.exe.
     echo 路径: %ZIP_EXE_PATH%

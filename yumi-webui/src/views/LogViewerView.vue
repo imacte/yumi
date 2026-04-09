@@ -67,7 +67,7 @@ onMounted(() => {
       </template>
     </van-nav-bar>
 
-    <van-loading v-if="loading && !logContent" class="loading-center" vertical>加载中...</van-loading>
+    <van-loading v-if="loading && !logContent" class="loading-center" vertical>{{ t('loading') }}</van-loading>
 
     <div v-else class="terminal-card">
       <div class="terminal-header">
@@ -76,7 +76,7 @@ onMounted(() => {
           <span class="btn minimize"></span>
           <span class="btn maximize"></span>
         </div>
-        <div class="terminal-title">daemon.log — bash</div>
+        <div class="terminal-title">{{ t('log_terminal_title', { file: 'daemon.log', shell: 'bash' }) }}</div>
       </div>
       
       <div class="terminal-body" ref="terminalBody">

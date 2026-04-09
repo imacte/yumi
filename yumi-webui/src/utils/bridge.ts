@@ -2,6 +2,7 @@
 import { exec, toast, listPackages } from '@/kernelsu'; 
 import yaml from 'js-yaml';
 import { MockBridge } from './mock';
+import i18n from '@/i18n';
 
 declare global {
   interface Window {
@@ -31,26 +32,26 @@ const RealBridge = {
 
   async readFile(path: string): Promise<string> {
     const { errno, stdout } = await exec(`cat "${path}"`);
-    if (errno !== 0) throw new Error(`读取失败: ${path}`);
+    if (errno !== 0) throw new Error(i18n.global.t('read_failed', { path }) as string);
     return stdout;
   },
   async writeFile(path: string, content: string): Promise<void> {
     const escapedContent = content.replace(/"/g, '\\"');
     const { errno } = await exec(`echo "${escapedContent}" > "${path}"`);
-    if (errno !== 0) throw new Error(`写入失败: ${path}`);
+    if (errno !== 0) throw new Error(i18n.global.t('write_failed', { path }) as string);
   },
 
   async getRulesConfig(): Promise<any> { try { return yaml.load(await this.readFile(PATHS.RULES_YAML)) || {}; } catch (e) { return {}; } },
   async saveRulesConfig(config: any): Promise<void> { await this.writeFile(PATHS.RULES_YAML, yaml.dump(config)); },
   async getMainConfig(): Promise<any> { try { return yaml.load(await this.readFile(PATHS.CONFIG_YAML)) || {}; } catch (e) { return {}; } },
-  async saveMainConfig(config: any): Promise<void> { await this.writeFile(PATHS.CONFIG_YAML, yaml.dump(config)); toast('核心配置已保存'); },
+  async saveMainConfig(config: any): Promise<void> { await this.writeFile(PATHS.CONFIG_YAML, yaml.dump(config)); toast(i18n.global.t('core_config_saved') as string); },
 
   async getCurrentMode(): Promise<string> { try { return (await this.readFile(PATHS.CURRENT_MODE)).trim(); } catch (e) { return 'balance'; } },
   async setMode(mode: string): Promise<void> {
     const rules = await this.getRulesConfig();
     rules.global_mode = mode;
     await this.saveRulesConfig(rules);
-    toast(`已请求切换到: ${mode}`);
+    toast(i18n.global.t('switch_success', { mode }) as string);
   },
 
   async getInstalledApps(): Promise<string[]> { try { return await listPackages('user'); } catch (e) { return []; } },
@@ -82,7 +83,7 @@ const RealBridge = {
      }
      
      await this.saveRulesConfig(rules);
-     toast('应用规则已保存');
+     toast(i18n.global.t('app_rules_saved') as string);
   },
   // ============================================
 
