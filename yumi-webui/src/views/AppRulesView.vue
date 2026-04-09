@@ -16,13 +16,24 @@ const showActionSheet = ref(false);
 const selectedPkg = ref('');
 
 const actions = computed(() => [
-  { name: 'powersave', color: '#4CAF50' },
-  { name: 'balance', color: '#2196F3' },
-  { name: 'performance', color: '#FF9800' },
-  { name: 'fast', color: '#F44336' },
-  { name: 'fas', color: '#E91E63' },
+  { name: t('mode_powersave'), subname: t('desc_powersave'), color: '#4CAF50', modeKey: 'powersave' },
+  { name: t('mode_balance'), subname: t('desc_balance'), color: '#2196F3', modeKey: 'balance' },
+  { name: t('mode_performance'), subname: t('desc_performance'), color: '#FF9800', modeKey: 'performance' },
+  { name: t('mode_fast'), subname: t('desc_fast'), color: '#F44336', modeKey: 'fast' },
+  { name: t('mode_fas'), subname: t('desc_fas'), color: '#E91E63', modeKey: 'fas' },
   { name: t('delete_rule'), color: '#FF0000', isDelete: true }
 ]);
+
+const modeLabel = (modeKey: string) => {
+  switch (modeKey) {
+    case 'powersave': return t('mode_powersave');
+    case 'balance': return t('mode_balance');
+    case 'performance': return t('mode_performance');
+    case 'fast': return t('mode_fast');
+    case 'fas': return t('mode_fas');
+    default: return modeKey;
+  }
+};
 
 onMounted(async () => {
   const packages = await Bridge.getInstalledApps();
@@ -65,8 +76,8 @@ const onSelectAction = async (item: any) => {
     delete store.appRules[selectedPkg.value];
     await Bridge.saveAppRule(selectedPkg.value, '');
   } else {
-    store.appRules[selectedPkg.value] = item.name;
-    await Bridge.saveAppRule(selectedPkg.value, item.name);
+    store.appRules[selectedPkg.value] = item.modeKey;
+    await Bridge.saveAppRule(selectedPkg.value, item.modeKey);
   }
 };
 </script>
@@ -96,7 +107,7 @@ const onSelectAction = async (item: any) => {
         </template>
         <template #value>
           <van-tag v-if="store.appRules[pkg]" type="primary" size="medium">
-            {{ store.appRules[pkg] }}
+            {{ modeLabel(store.appRules[pkg]) }}
           </van-tag>
           <span v-else class="no-rule">{{ t('not_configured') }}</span>
         </template>

@@ -40,7 +40,7 @@ const copyQQGroup = async () => {
     toast(t('copied'));
   } catch (err) {
     // 兼容性降级处理
-    toast('QQ: 103609137');
+    toast(t('qq_copy_fallback', { qq: '103609137' }));
   }
 };
 </script>
@@ -51,7 +51,7 @@ const copyQQGroup = async () => {
     <div class="top-header">
       <div class="lang-btn" @click="toggleLanguage">
         <van-icon name="exchange" size="16" />
-        <span>{{ locale === 'zh' ? 'EN' : '中' }}</span>
+        <span>{{ locale === 'zh' ? t('lang_en_short') : t('lang_zh_short') }}</span>
       </div>
     </div>
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, h, defineComponent } from 'vue';
+import { ref, onMounted, h, defineComponent, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Bridge } from '@/utils/bridge';
 // 1. 从 vant 中移除 showToast
@@ -18,10 +18,32 @@ const editingKeyPath = ref('');
 const editingValue = ref('');
 const editingType = ref<'string' | 'number' | 'array'>('string');
 
-const modeActions = [{ name: 'powersave', color: '#4CAF50' }, { name: 'balance', color: '#2196F3' }, { name: 'performance', color: '#FF9800' }, { name: 'fast', color: '#F44336' }];
-const appModeActions = [{ name: 'powersave', color: '#4CAF50' }, { name: 'balance', color: '#2196F3' }, { name: 'performance', color: '#FF9800' }, { name: 'fast', color: '#F44336' }, { name: 'fas', color: '#E91E63' }, { name: '删除该规则', color: '#FF0000', isDelete: true }];
-const languageActions = [{ name: 'zh' }, { name: 'en' }];
-const loglevelActions = [{ name: 'OFF' }, { name: 'ERROR' }, { name: 'WARN' }, { name: 'INFO' }, { name: 'DEBUG' }, { name: 'TRACE' }];
+const modeActions = computed(() => [
+  { name: t('mode_powersave'), subname: t('desc_powersave'), color: '#4CAF50', modeKey: 'powersave' },
+  { name: t('mode_balance'), subname: t('desc_balance'), color: '#2196F3', modeKey: 'balance' },
+  { name: t('mode_performance'), subname: t('desc_performance'), color: '#FF9800', modeKey: 'performance' },
+  { name: t('mode_fast'), subname: t('desc_fast'), color: '#F44336', modeKey: 'fast' }
+]);
+const appModeActions = computed(() => [
+  { name: t('mode_powersave'), subname: t('desc_powersave'), color: '#4CAF50', modeKey: 'powersave' },
+  { name: t('mode_balance'), subname: t('desc_balance'), color: '#2196F3', modeKey: 'balance' },
+  { name: t('mode_performance'), subname: t('desc_performance'), color: '#FF9800', modeKey: 'performance' },
+  { name: t('mode_fast'), subname: t('desc_fast'), color: '#F44336', modeKey: 'fast' },
+  { name: t('mode_fas'), subname: t('desc_fas'), color: '#E91E63', modeKey: 'fas' },
+  { name: t('delete_rule'), color: '#FF0000', isDelete: true }
+]);
+const languageActions = computed(() => [
+  { name: t('lang_zh'), langCode: 'zh' },
+  { name: t('lang_en'), langCode: 'en' }
+]);
+const loglevelActions = computed(() => [
+  { name: t('loglevel_off'), level: 'OFF' },
+  { name: t('loglevel_error'), level: 'ERROR' },
+  { name: t('loglevel_warn'), level: 'WARN' },
+  { name: t('loglevel_info'), level: 'INFO' },
+  { name: t('loglevel_debug'), level: 'DEBUG' },
+  { name: t('loglevel_trace'), level: 'TRACE' }
+]);
 
 const showModeSheet = ref(false);
 const showAppModeSheet = ref(false);
@@ -137,15 +159,15 @@ const confirmEdit = () => {
   showEditDialog.value = false;
 };
 
-const onSelectMode = (a: any) => { currentData.value.global_mode = a.name; saveConfig(); showModeSheet.value = false; };
+const onSelectMode = (a: any) => { currentData.value.global_mode = a.modeKey; saveConfig(); showModeSheet.value = false; };
 const onSelectAppMode = (a: any) => {
   const pkg = editingKeyPath.value.split('/').pop() || '';
   if (a.isDelete) delete currentData.value.app_modes[pkg];
-  else currentData.value.app_modes[pkg] = a.name;
+  else currentData.value.app_modes[pkg] = a.modeKey;
   saveConfig(); showAppModeSheet.value = false;
 };
-const onSelectLanguage = (a: any) => { setDeepValue(currentData.value, 'meta/language', a.name); saveConfig(); showLanguageSheet.value = false; };
-const onSelectLoglevel = (a: any) => { setDeepValue(currentData.value, 'meta/loglevel', a.name); saveConfig(); showLoglevelSheet.value = false; };
+const onSelectLanguage = (a: any) => { setDeepValue(currentData.value, 'meta/language', a.langCode); saveConfig(); showLanguageSheet.value = false; };
+const onSelectLoglevel = (a: any) => { setDeepValue(currentData.value, 'meta/loglevel', a.level); saveConfig(); showLoglevelSheet.value = false; };
 
 const RecursiveItem = defineComponent({
   name: 'RecursiveItem',
@@ -174,8 +196,8 @@ const RecursiveItem = defineComponent({
               style: { padding: '4px', cursor: 'pointer' },
               onClick: () => {
                 showConfirmDialog({
-                  title: '确认删除',
-                  message: `确定要删除 ${props.name} 的专属配置吗？`,
+                  title: t('confirm_delete_title'),
+                  message: t('confirm_delete_message', { name: props.name }),
                   confirmButtonColor: '#ee0a24'
                 }).then(() => {
                   const keys = props.path.split('/');
@@ -229,18 +251,18 @@ const RecursiveItem = defineComponent({
 
 <template>
   <div class="config-editor">
-    <van-nav-bar title="详细配置" left-arrow @click-left="$router.back()" fixed placeholder>
+    <van-nav-bar :title="t('detailed_config')" left-arrow @click-left="$router.back()" fixed placeholder>
       <template #right><van-icon name="replay" size="18" @click="loadData" /></template>
     </van-nav-bar>
 
     <div class="tab-container">
       <van-tabs v-model:active="activeTab" type="card" animated @change="loadData" color="#1989fa">
-        <van-tab title="调度规则 (Rules)" name="rules" />
-        <van-tab title="核心配置 (Config)" name="config" />
+        <van-tab :title="t('rules_tab')" name="rules" />
+        <van-tab :title="t('config_tab')" name="config" />
       </van-tabs>
     </div>
 
-    <van-loading v-if="loading" class="loading-center" vertical>加载中...</van-loading>
+    <van-loading v-if="loading" class="loading-center" vertical>{{ t('loading') }}</van-loading>
 
     <div v-else class="config-content">
       <van-collapse v-model="activeNames" :border="false">
@@ -249,17 +271,17 @@ const RecursiveItem = defineComponent({
       <div style="height: 60px;"></div>
     </div>
 
-    <van-dialog v-model:show="showEditDialog" title="编辑" show-cancel-button @confirm="confirmEdit">
+    <van-dialog v-model:show="showEditDialog" :title="t('edit')" show-cancel-button @confirm="confirmEdit">
       <div class="dialog-content">
         <div class="path-hint">{{ editingKeyPath.replace(/\//g, ' > ') }}</div>
         <van-field v-model="editingValue" :type="editingType === 'number' ? 'number' : 'text'" input-align="center" border autofocus />
       </div>
     </van-dialog>
 
-    <van-action-sheet v-model:show="showModeSheet" :actions="modeActions" cancel-text="取消" @select="onSelectMode" />
-    <van-action-sheet v-model:show="showAppModeSheet" :actions="appModeActions" cancel-text="取消" @select="onSelectAppMode" />
-    <van-action-sheet v-model:show="showLanguageSheet" :actions="languageActions" cancel-text="取消" @select="onSelectLanguage" />
-    <van-action-sheet v-model:show="showLoglevelSheet" :actions="loglevelActions" cancel-text="取消" @select="onSelectLoglevel" />
+    <van-action-sheet v-model:show="showModeSheet" :actions="modeActions" :cancel-text="t('cancel')" @select="onSelectMode" />
+    <van-action-sheet v-model:show="showAppModeSheet" :actions="appModeActions" :cancel-text="t('cancel')" @select="onSelectAppMode" />
+    <van-action-sheet v-model:show="showLanguageSheet" :actions="languageActions" :cancel-text="t('cancel')" @select="onSelectLanguage" />
+    <van-action-sheet v-model:show="showLoglevelSheet" :actions="loglevelActions" :cancel-text="t('cancel')" @select="onSelectLoglevel" />
   </div>
 </template>
 
