@@ -4,7 +4,7 @@ name: Build Yumi
 # workflow_dispatch 允许在 GitHub 网页端手动点击运行。
 on:
   push:
-    branches: [ "main" ]
+  branches: [ "main" ]
   tags:
     - 'v*'
   pull_request:
