@@ -36,6 +36,17 @@ use crate::i18n::{t, t_with_args};
 pub fn start_monitor(tx: Sender<DaemonEvent>) -> Result<(), Box<dyn Error>> {
     info!("{}", t("monitor-starting"));
 
+    // ===== 解除内核 eBPF Map 内存锁定限制 =====
+    unsafe {
+        let rlim = libc::rlimit {
+            rlim_cur: libc::RLIM_INFINITY,
+            rlim_max: libc::RLIM_INFINITY,
+        };
+        if libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) != 0 {
+            log::warn!("Failed to raise RLIMIT_MEMLOCK. eBPF maps might fail to load.");
+        }
+    }
+    
     // --- 初始化共享配置 ---
     let rules_path = config::get_rules_path();
     
