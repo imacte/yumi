@@ -12,6 +12,7 @@ monitor-fps-crashed = [Main] FPS 监控崩溃: { $error }
 monitor-fps-tokio-failed = [Main] 无法为 FPS 监控创建 Tokio 运行时
 monitor-cpu-crashed = [Main] CPU 负载监控崩溃: { $error }
 monitor-cpu-tokio-failed = [Main] 无法为 CPU 监控创建 Tokio 运行时
+monitor-rlimit-memlock-failed = [Main] 提升 RLIMIT_MEMLOCK 失败，eBPF Map 可能无法加载。
 
 # --- AppDetect ---
 app-detect-config-watch = [AppDetect] 开始监控配置文件: { $path }

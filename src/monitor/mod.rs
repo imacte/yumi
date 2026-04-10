@@ -43,7 +43,7 @@ pub fn start_monitor(tx: Sender<DaemonEvent>) -> Result<(), Box<dyn Error>> {
             rlim_max: libc::RLIM_INFINITY,
         };
         if libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) != 0 {
-            log::warn!("Failed to raise RLIMIT_MEMLOCK. eBPF maps might fail to load.");
+            log::warn!("{}", t("monitor-rlimit-memlock-failed"));
         }
     }
     

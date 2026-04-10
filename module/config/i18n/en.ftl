@@ -13,6 +13,7 @@ monitor-fps-crashed = [Main] FPS Monitor crashed: { $error }
 monitor-fps-tokio-failed = [Main] Failed to create Tokio runtime for FPS monitor
 monitor-cpu-crashed = [Main] CPU Load Monitor crashed: { $error }
 monitor-cpu-tokio-failed = [Main] Failed to create Tokio runtime for CPU monitor
+monitor-rlimit-memlock-failed = [Main] Failed to raise RLIMIT_MEMLOCK. eBPF maps might fail to load.
 
 # --- AppDetect ---
 app-detect-config-watch = [AppDetect] Started watching config file: { $path }
