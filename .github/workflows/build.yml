@@ -57,7 +57,7 @@ jobs:
           echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
           cargo install cargo-ndk
 
-      # 7. 运行你的 xtask 构建脚本
+      # 7. 运行 xtask 构建脚本
       - name: Run xtask build
         run: cargo xtask build
 
