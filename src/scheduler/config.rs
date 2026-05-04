@@ -36,6 +36,7 @@ fn default_language() -> String { "en".to_string() }
 #[derive(Debug, Deserialize, Clone)]
 pub struct CpuLoadGovernorConfig {
     #[serde(default = "default_true")] pub enabled: bool,
+    #[serde(default = "d_clg_scaling_governor")] pub scaling_governor: String,
     #[serde(default = "d_clg_up_thresh")] pub up_threshold: f32,
     #[serde(default = "d_clg_down_thresh")] pub down_threshold: f32,
     #[serde(default = "d_clg_smooth_up")] pub smoothing_up: f32,
@@ -48,6 +49,7 @@ pub struct CpuLoadGovernorConfig {
 }
 
 fn default_true() -> bool { true }
+fn d_clg_scaling_governor() -> String { "walt".to_string() }
 fn d_clg_up_thresh() -> f32 { 0.80 }
 fn d_clg_down_thresh() -> f32 { 0.50 }
 fn d_clg_smooth_up() -> f32 { 0.60 }
@@ -62,6 +64,7 @@ impl Default for CpuLoadGovernorConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            scaling_governor: d_clg_scaling_governor(),
             up_threshold: d_clg_up_thresh(),
             down_threshold: d_clg_down_thresh(),
             smoothing_up: d_clg_smooth_up(),

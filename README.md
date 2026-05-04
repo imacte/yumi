@@ -301,7 +301,8 @@ CpuIdle:
 
 ```yaml
 balance:
-  CpuLoadGovernor:
+  cpu_load_governor:
+    scaling_governor: "walt"
     up_threshold: 0.80
     down_threshold: 0.50
     smoothing_up: 0.60
@@ -315,6 +316,7 @@ balance:
 
 | 参数 | 类型 | 默认值 | 描述 |
 | :--- | :--- | :--- | :--- |
+| `scaling_governor` | string | walt | CLG 接管前写入的 CPUFreq governor；省电/均衡默认使用 `walt`，避免被 `performance` governor 主动拉高频率。 |
 | `up_threshold` | float | 0.80 | 负载超过此阈值时快速升频。 |
 | `down_threshold` | float | 0.50 | 负载低于此阈值时允许降频。 |
 | `smoothing_up` | float | 0.60 | 升频平滑系数（越大越快）。 |

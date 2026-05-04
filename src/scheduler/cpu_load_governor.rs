@@ -119,7 +119,11 @@ impl CpuLoadGovernor {
         for pid in clusters {
             let gov_path = format!(
                 "/sys/devices/system/cpu/cpufreq/policy{}/scaling_governor", pid);
-            let _ = crate::utils::try_write_file(&gov_path, "performance");
+            if let Some(governor) = Self::select_scaling_governor(pid, &self.cfg.scaling_governor) {
+                let _ = crate::utils::try_write_file(&gov_path, &governor);
+            } else {
+                warn!("CLG: no usable scaling governor found for policy{}", pid);
+            }
 
             let freq_path = format!(
                 "/sys/devices/system/cpu/cpufreq/policy{}/scaling_available_frequencies", pid);
@@ -259,6 +263,41 @@ impl CpuLoadGovernor {
                 )));
             }
         }
+    }
+
+    fn select_scaling_governor(policy_id: i32, preferred: &str) -> Option<String> {
+        let available_path = format!(
+            "/sys/devices/system/cpu/cpufreq/policy{}/scaling_available_governors",
+            policy_id
+        );
+        let available: Vec<String> = fs::read_to_string(&available_path)
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+
+        if available.is_empty() {
+            let trimmed = preferred.trim();
+            return (!trimmed.is_empty()).then(|| trimmed.to_string());
+        }
+
+        let preferred = preferred.trim();
+        if !preferred.is_empty() && available.iter().any(|g| g == preferred) {
+            return Some(preferred.to_string());
+        }
+
+        [
+            "walt",
+            "schedutil",
+            "interactive",
+            "ondemand",
+            "conservative",
+            "powersave",
+            "performance",
+        ]
+        .iter()
+        .find(|&&candidate| available.iter().any(|g| g == candidate))
+        .map(|&candidate| candidate.to_string())
     }
 
     fn read_affected_cpus(policy_id: i32) -> Vec<usize> {

@@ -301,7 +301,8 @@ Each performance mode can independently configure CPU Load Governor (CLG) parame
 
 ```yaml
 balance:
-  CpuLoadGovernor:
+  cpu_load_governor:
+    scaling_governor: "walt"
     up_threshold: 0.80
     down_threshold: 0.50
     smoothing_up: 0.60
@@ -315,6 +316,7 @@ balance:
 
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
+| `scaling_governor` | string | walt | CPUFreq governor written before CLG takes control; use `walt` by default for powersave/balance to avoid `performance` governor pulling frequency up. |
 | `up_threshold` | float | 0.80 | Ramps up frequency quickly when load exceeds this threshold. |
 | `down_threshold` | float | 0.50 | Allows frequency ramp-down when load drops below this threshold. |
 | `smoothing_up` | float | 0.60 | Ramp-up smoothing coefficient (larger = faster). |
