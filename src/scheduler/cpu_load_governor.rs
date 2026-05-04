@@ -276,10 +276,7 @@ impl CpuLoadGovernor {
             .map(str::to_string)
             .collect();
 
-        if available.is_empty() {
-            let trimmed = preferred.trim();
-            return (!trimmed.is_empty()).then(|| trimmed.to_string());
-        }
+        if available.is_empty() { return None; }
 
         let preferred = preferred.trim();
         if !preferred.is_empty() && available.iter().any(|g| g == preferred) {

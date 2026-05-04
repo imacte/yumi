@@ -85,7 +85,7 @@ impl Default for CpuLoadGovernorConfig {
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct Mode {
-    #[serde(default)]
+    #[serde(default, alias = "cpu_load_governor")]
     pub cpu_load_governor: CpuLoadGovernorConfig,
 }
 
