@@ -98,7 +98,14 @@ fn build(sh: &Shell) -> Result<()> {
         bin_path.join("yumi"),
         &file::CopyOptions::new().overwrite(true),
     )?;
-
+    
+    let webroot_dir = temp_dir.join("webroot");
+    dir::copy(
+        Path::new("webui").join("dist"),
+        &webroot_dir,
+        &dir::CopyOptions::new().overwrite(true).content_only(true),
+    )?;
+    
     // 6. 打包 Zip
     let output_dir = Path::new("output");
     fs::create_dir_all(output_dir)?; // 确保 output 目录存在
