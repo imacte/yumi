@@ -34,22 +34,45 @@ use scheduler::CpuScheduler;
 use crate::logger;
 use crate::common;
 
-// 动态获取系统中实际可用的 CPU Policy
-pub fn get_cpu_policies() -> Vec<i32> {
+/// CPU 频率策略簇信息
+pub struct CpuPolicy {
+    pub id: i32,
+    /// boost 频率列表（单位 kHz），有的簇没有此文件则为空
+    pub boost_frequencies: Vec<u32>,
+}
+
+// 动态获取系统中实际可用的 CPU Policy，并读取 boost 频率
+pub fn get_cpu_policies() -> Vec<CpuPolicy> {
     let mut policies = Vec::new();
     if let Ok(entries) = std::fs::read_dir("/sys/devices/system/cpu/cpufreq") {
         for entry in entries.flatten() {
             if let Some(name) = entry.file_name().to_str() {
                 if name.starts_with("policy") {
                     if let Ok(pid) = name["policy".len()..].parse::<i32>() {
-                        policies.push(pid);
+                        let boost_freqs = read_boost_frequencies(pid);
+                        policies.push(CpuPolicy {
+                            id: pid,
+                            boost_frequencies: boost_freqs,
+                        });
                     }
                 }
             }
         }
     }
-    policies.sort_unstable();
+    policies.sort_unstable_by_key(|p| p.id);
     policies
+}
+
+fn read_boost_frequencies(pid: i32) -> Vec<u32> {
+    let path = format!(
+        "/sys/devices/system/cpu/cpufreq/policy{}/scaling_boost_frequencies",
+        pid
+    );
+    std::fs::read_to_string(&path)
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect()
 }
 
 pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {

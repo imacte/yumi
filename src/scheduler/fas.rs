@@ -24,6 +24,7 @@ use std::time::Instant;
 use log::{info, warn};
 
 use crate::i18n::{t, t_with_args};
+use super::CpuPolicy;
 use crate::fluent_args;
 
 // ════════════════════════════════════════════════════════════════
@@ -384,10 +385,10 @@ fn probe_policy_capacity(policy_id: i32) -> Option<u32> {
         .ok()?.trim().parse::<u32>().ok()
 }
 
-fn auto_compute_capacity_weights(policy_ids: &[i32]) -> Option<Vec<(i32, f32)>> {
-    let caps: Vec<(i32, u32)> = policy_ids.iter()
-        .filter(|&&pid| pid != -1)
-        .filter_map(|&pid| probe_policy_capacity(pid).map(|c| (pid, c)))
+fn auto_compute_capacity_weights(policies: &[CpuPolicy]) -> Option<Vec<(i32, f32)>> {
+    let caps: Vec<(i32, u32)> = policies.iter()
+        .filter(|p| p.id != -1)
+        .filter_map(|p| probe_policy_capacity(p.id).map(|c| (p.id, c)))
         .collect();
     if caps.is_empty() || caps.iter().any(|&(_, c)| c == 0) { return None; }
     let min_cap = caps.iter().map(|&(_, c)| c).min().unwrap() as f32;
@@ -1030,7 +1031,8 @@ impl FasController {
             })
         } else { None };
 
-        for (idx, &pid) in clusters.iter().enumerate() {
+        for (idx, policy) in clusters.iter().enumerate() {
+            let pid = policy.id;
             let _ = crate::utils::try_write_file(
                 &format!("/sys/devices/system/cpu/cpufreq/policy{}/scaling_governor", pid),
                 "performance");

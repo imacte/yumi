@@ -32,6 +32,7 @@ struct ClusterState {
     policy_id: i32,
     affected_cpus: Vec<usize>,
     available_freqs: Vec<u32>,
+    boost_frequencies: Vec<u32>,
     cached_ratios: Vec<f32>,
     _freq_min: f32,
     _freq_max: f32,
@@ -116,7 +117,8 @@ impl CpuLoadGovernor {
 
         let clusters = crate::scheduler::get_cpu_policies();
 
-        for pid in clusters {
+        for policy in &clusters {
+            let pid = policy.id;
             let gov_path = format!(
                 "/sys/devices/system/cpu/cpufreq/policy{}/scaling_governor", pid);
             let _ = crate::utils::try_write_file(&gov_path, "performance");
@@ -161,6 +163,7 @@ impl CpuLoadGovernor {
                 policy_id: pid,
                 affected_cpus: affected.clone(),
                 available_freqs: freqs,
+                boost_frequencies: policy.boost_frequencies.clone(),
                 cached_ratios,
                 _freq_min: fmin,
                 _freq_max: fmax,

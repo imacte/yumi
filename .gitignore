@@ -1,4 +1,26 @@
-yumi-*.zip
+# Build
 /target
+xtask/target
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Rust
+*.rs.bk
+
+# AI tooling
+.reasonix/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Artifacts
+yumi-*.zip
 *.bak
 output/
+*.log
