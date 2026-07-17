@@ -16,8 +16,6 @@
  */
 
 use std::error::Error;
-use std::fs::File;
-use std::io::Read;
 use std::sync::{Arc, Mutex};
 use log::{info};
 use std::process; 
@@ -28,12 +26,6 @@ use netlink_sys::{protocols::NETLINK_KOBJECT_UEVENT, Socket, SocketAddr};
 
 use crate::i18n::{t, t_with_args};
 use crate::fluent_args;
-
-fn read_int_file(path: &str) -> Result<i32, Box<dyn Error>> {
-    let mut content = String::new();
-    File::open(path)?.read_to_string(&mut content)?;
-    Ok(content.trim().parse()?)
-}
 
 fn update_state_if_changed(state_arc: &Arc<Mutex<bool>>, new_state: bool, source: &str) {
     let mut state_lock = state_arc.lock().unwrap();
@@ -67,8 +59,8 @@ pub fn monitor_screen_state_uevent(state_arc: Arc<Mutex<bool>>) -> Result<(), Bo
                         let bl_power = format!("/sys{}/bl_power", dev);
                         let actual = format!("/sys{}/actual_brightness", dev);
                         
-                        let new_state = read_int_file(&bl_power).map(|v| v == 0)
-                            .or_else(|_| read_int_file(&actual).map(|v| v > 0)).ok();
+                        let new_state = crate::utils::read_i32_from_file(&bl_power).map(|v| v == 0)
+                            .or_else(|_| crate::utils::read_i32_from_file(&actual).map(|v| v > 0)).ok();
                         
                         if let Some(state) = new_state {
                             update_state_if_changed(&state_arc, state, "backlight");

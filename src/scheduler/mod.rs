@@ -18,6 +18,7 @@
 use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::thread;
 use std::time::Instant;
+use std::fs;
 use anyhow::Result;
 
 pub mod config;
@@ -73,6 +74,32 @@ fn read_boost_frequencies(pid: i32) -> Vec<u32> {
         .split_whitespace()
         .filter_map(|s| s.parse().ok())
         .collect()
+}
+
+/// 通过 sysfs 探测指定 policy 的 capacity 值
+pub(super) fn probe_policy_capacity(policy_id: i32) -> Option<u32> {
+    let related_str = fs::read_to_string(
+        format!("/sys/devices/system/cpu/cpufreq/policy{}/related_cpus", policy_id))
+        .or_else(|_| fs::read_to_string(
+            format!("/sys/devices/system/cpu/cpufreq/policy{}/affected_cpus", policy_id)))
+        .ok()?;
+    let first_cpu: u32 = related_str.split_whitespace().next()?.parse().ok()?;
+    fs::read_to_string(format!("/sys/devices/system/cpu/cpu{}/cpu_capacity", first_cpu))
+        .ok()?.trim().parse::<u32>().ok()
+}
+
+/// 根据 CPU capacity 自动计算每个 cluster 的权重
+pub(super) fn auto_compute_capacity_weights(policies: &[CpuPolicy]) -> Option<Vec<(i32, f32)>> {
+    let caps: Vec<(i32, u32)> = policies.iter()
+        .filter(|p| p.id != -1)
+        .filter_map(|p| probe_policy_capacity(p.id).map(|c| (p.id, c)))
+        .collect();
+    if caps.is_empty() || caps.iter().any(|&(_, c)| c == 0) { return None; }
+    let min_cap = caps.iter().map(|&(_, c)| c).min().unwrap() as f32;
+    Some(caps.iter().map(|&(pid, cap)| {
+        let r = cap as f32 / min_cap;
+        (pid, if r <= 1.01 { 1.0 } else { 1.0 + (r - 1.0).sqrt() })
+    }).collect())
 }
 
 pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
@@ -149,7 +176,7 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
             let mut cpu_governor = crate::scheduler::cpu_load_governor::CpuLoadGovernor::new();
 
             let rules_path = crate::monitor::config::get_rules_path();
-            let mut current_rules = crate::monitor::config::read_config::<crate::monitor::config::RulesConfig, _>(&rules_path).unwrap_or_default();
+            let mut current_rules = crate::utils::read_config::<crate::monitor::config::RulesConfig, _>(&rules_path).unwrap_or_default();
 
             // 状态机变量
             let mut fas_suspended_at: Option<Instant> = None;

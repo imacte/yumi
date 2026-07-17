@@ -21,6 +21,7 @@ mod monitor;
 mod scheduler;
 pub mod i18n;
 pub mod utils;
+pub mod fas_types;
 use std::sync::mpsc;
 use std::thread;
 use anyhow::Result;

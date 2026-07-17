@@ -23,17 +23,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use crate::common::DaemonEvent;
 use crate::monitor::app_detect;
+use crate::utils::get_ktime_ns;
 use log::{info, warn, debug};
 
 use crate::i18n::{t, t_with_args};
 use crate::fluent_args;
-
-/// 获取与 BPF ktime_get_ns() 绝对对齐的单调时钟时间 (纳秒)
-fn get_ktime_ns() -> u64 {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
-    (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64)
-}
 
 fn get_thread_tids(pid: u32) -> Vec<u32> {
     let task_dir = format!("/proc/{}/task", pid);

@@ -204,7 +204,7 @@ pub fn watch_config_file(
             while let Ok(events) = inotify.read_events(&mut buffer) { if events.peekable().peek().is_none() { break; } }
             info!("{}", t("app-detect-reloading"));
             
-            let new_config = config::read_config::<RulesConfig, _>(&rules_path)
+            let new_config = crate::utils::read_config::<RulesConfig, _>(&rules_path)
                                 .unwrap_or_else(|e| { 
                                     warn!("{}", t_with_args("app-detect-load-failed", &fluent_args!("error" => e.to_string()))); 
                                     get_default_rules() 

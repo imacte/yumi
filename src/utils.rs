@@ -18,6 +18,7 @@
 use anyhow::{Result};
 use inotify::{Inotify, WatchMask};
 use log;
+use serde::de::DeserializeOwned;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write, Seek, SeekFrom};
 use std::os::unix::fs::PermissionsExt;
@@ -271,5 +272,49 @@ impl FastWriter {
         buf.copy_within(start..19, 0);
         buf[digit_len] = b'\n';
         digit_len + 1
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  通用跨模块工具函数
+// ════════════════════════════════════════════════════════════════
+
+/// Serde 默认值辅助函数：始终返回 true
+pub fn default_true() -> bool { true }
+
+/// 读取文件内容并解析为 i32
+pub fn read_i32_from_file(path: &str) -> Result<i32> {
+    let mut content = String::new();
+    File::open(path)?.read_to_string(&mut content)?;
+    Ok(content.trim().parse()?)
+}
+
+/// 获取与 BPF ktime_get_ns() 绝对对齐的单调时钟时间 (纳秒)
+pub fn get_ktime_ns() -> u64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64)
+}
+
+/// Serde 反序列化辅助：从 YAML 文件读取配置，解析失败时返回 Default
+pub fn read_config<T, P>(path: P) -> Result<T>
+where
+    T: DeserializeOwned + Default,
+    P: AsRef<Path>,
+{
+    let path_ref = path.as_ref();
+    match File::open(path_ref) {
+        Ok(mut file) => {
+            let mut s = String::new();
+            file.read_to_string(&mut s)?;
+            serde_yaml::from_str(&s).or_else(|e| {
+                log::warn!("[Config] Parse error {}: {}. Default.", path_ref.display(), e);
+                Ok(T::default())
+            })
+        }
+        Err(_) => {
+            log::warn!("[Config] Not found: {}. Default.", path_ref.display());
+            Ok(T::default())
+        }
     }
 }

@@ -51,7 +51,7 @@ pub fn start_monitor(tx: Sender<DaemonEvent>) -> Result<(), Box<dyn Error>> {
     let rules_path = config::get_rules_path();
     
     // --- 初始化配置 ---
-    let initial_config = config::read_config(&rules_path) 
+    let initial_config = crate::utils::read_config(&rules_path) 
                             .unwrap_or_else(|e| {
                                 log::warn!("{}", t_with_args("monitor-initial-config-failed", &fluent_args!("error" => e.to_string())));
                                 app_detect::get_default_rules()

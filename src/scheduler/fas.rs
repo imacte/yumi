@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use crate::monitor::config::{
+use crate::fas_types::{
     FasRulesConfig, ClusterProfile, PerAppProfile,
 };
 use crate::utils::FastWriter;
@@ -24,7 +24,6 @@ use std::time::Instant;
 use log::{info, warn};
 
 use crate::i18n::{t, t_with_args};
-use super::CpuPolicy;
 use crate::fluent_args;
 
 // ════════════════════════════════════════════════════════════════
@@ -373,30 +372,6 @@ impl PidController {
 // ════════════════════════════════════════════════════════════════
 //  工具函数
 // ════════════════════════════════════════════════════════════════
-
-fn probe_policy_capacity(policy_id: i32) -> Option<u32> {
-    let related_str = fs::read_to_string(
-        format!("/sys/devices/system/cpu/cpufreq/policy{}/related_cpus", policy_id))
-        .or_else(|_| fs::read_to_string(
-            format!("/sys/devices/system/cpu/cpufreq/policy{}/affected_cpus", policy_id)))
-        .ok()?;
-    let first_cpu: u32 = related_str.split_whitespace().next()?.parse().ok()?;
-    fs::read_to_string(format!("/sys/devices/system/cpu/cpu{}/cpu_capacity", first_cpu))
-        .ok()?.trim().parse::<u32>().ok()
-}
-
-fn auto_compute_capacity_weights(policies: &[CpuPolicy]) -> Option<Vec<(i32, f32)>> {
-    let caps: Vec<(i32, u32)> = policies.iter()
-        .filter(|p| p.id != -1)
-        .filter_map(|p| probe_policy_capacity(p.id).map(|c| (p.id, c)))
-        .collect();
-    if caps.is_empty() || caps.iter().any(|&(_, c)| c == 0) { return None; }
-    let min_cap = caps.iter().map(|&(_, c)| c).min().unwrap() as f32;
-    Some(caps.iter().map(|&(pid, cap)| {
-        let r = cap as f32 / min_cap;
-        (pid, if r <= 1.01 { 1.0 } else { 1.0 + (r - 1.0).sqrt() })
-    }).collect())
-}
 
 #[inline]
 fn fps_norm(target_fps: f32) -> f32 {
@@ -1018,12 +993,12 @@ impl FasController {
         let clusters = crate::scheduler::get_cpu_policies();
 
         let auto_w = if fas_rules.auto_capacity_weight {
-            auto_compute_capacity_weights(&clusters).map(|w| {
+            super::auto_compute_capacity_weights(&clusters).map(|w| {
                 info!("{}", t("fas-auto-capacity"));
                 for &(pid, wt) in &w {
                     info!("{}", t_with_args("fas-auto-capacity-core", &fluent_args!(
                         "pid" => pid.to_string(),
-                        "cap" => probe_policy_capacity(pid).unwrap_or(0).to_string(),
+                        "cap" => super::probe_policy_capacity(pid).unwrap_or(0).to_string(),
                         "weight" => format!("{:.2}", wt)
                     )));
                 }
