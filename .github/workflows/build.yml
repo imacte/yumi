@@ -28,7 +28,7 @@ jobs:
 
       # 2. 配置 Node.js 环境 (用于编译 WebUI)
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '24' # 推荐使用 LTS 版本
           
