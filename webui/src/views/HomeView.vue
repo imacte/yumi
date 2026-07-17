@@ -35,12 +35,12 @@ const handleModeSelect = async (modeKey: string) => {
 const copyQQGroup = async () => {
   try {
     // 现代浏览器剪贴板 API
-    await navigator.clipboard.writeText('103609137');
+    await navigator.clipboard.writeText('1036909137');
     // 使用原生的 ksu toast，避免 Vant 白块 bug
     toast(t('copied'));
   } catch (err) {
     // 兼容性降级处理
-    toast(t('qq_copy_fallback', { qq: '103609137' }));
+    toast(t('qq_copy_fallback', { qq: '1036909137' }));
   }
 };
 </script>
