@@ -27,7 +27,7 @@
     "@vant/auto-import-resolver": "^1.3.0",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/tsconfig": "^0.9.1",
-    "npm-run-all2": "^8.0.4",
+    "npm-run-all2": "^9.0.2",
     "typescript": "~5.9.3",
     "unplugin-auto-import": "^21.0.0",
     "unplugin-vue-components": "^32.1.0",
