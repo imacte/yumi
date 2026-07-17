@@ -24,7 +24,7 @@ lazy_static = "1.5.0"
 
 # --- 异步与 eBPF (新增) ---
 # Aya 用于加载和与内核 eBPF 程序交互
-aya = { version = "0.13.1" }
+aya = { version = "0.14.0" }
 aya-log = "0.2.1"
 # Tokio 必须开启 full 或至少是 rt-multi-thread 和 macros 才能运行异步 FPS 循环
 tokio = { version = "1", features = ["full"] }
