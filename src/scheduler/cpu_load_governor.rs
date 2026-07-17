@@ -32,7 +32,6 @@ struct ClusterState {
     policy_id: i32,
     affected_cpus: Vec<usize>,
     available_freqs: Vec<u32>,
-    boost_frequencies: Vec<u32>,
     cached_ratios: Vec<f32>,
     _freq_min: f32,
     _freq_max: f32,
@@ -134,6 +133,13 @@ impl CpuLoadGovernor {
             freqs.sort_unstable();
             freqs.dedup();
 
+            // 合并 boost 频率（部分平台额外暴露的高频点），去重排序
+            if !policy.boost_frequencies.is_empty() {
+                freqs.extend(&policy.boost_frequencies);
+                freqs.sort_unstable();
+                freqs.dedup();
+            }
+
             let affected = Self::read_affected_cpus(pid);
             if affected.is_empty() { continue; }
 
@@ -163,7 +169,6 @@ impl CpuLoadGovernor {
                 policy_id: pid,
                 affected_cpus: affected.clone(),
                 available_freqs: freqs,
-                boost_frequencies: policy.boost_frequencies.clone(),
                 cached_ratios,
                 _freq_min: fmin,
                 _freq_max: fmax,
@@ -258,7 +263,7 @@ impl CpuLoadGovernor {
                     "util" => format!("{:.0}", c.max_util(core_utils) * 100.0),
                     "perf" => format!("{:.2}", c.current_perf),
                     "freq" => (c.current_freq / 1000).to_string(),
-                    "boost" => ""
+                    "boost" => format!("{:.0}", c.available_freqs.last().copied().unwrap_or(0) as f32 / 1000.0)
                 )));
             }
         }
