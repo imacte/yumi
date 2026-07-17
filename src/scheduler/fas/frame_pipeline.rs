@@ -17,7 +17,7 @@
 
 use log::info;
 
-use crate::i18n::{t, t_with_args};
+use crate::i18n::t_with_args;
 use crate::fluent_args;
 
 use super::pid::scale_frames;

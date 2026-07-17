@@ -19,11 +19,11 @@ use crate::fas_types::{FasRulesConfig, PerAppProfile};
 use std::time::Instant;
 use log::{info, warn};
 
-use crate::i18n::{t, t_with_args};
+use crate::i18n::t_with_args;
 use crate::fluent_args;
 
 use super::fps_window::FpsWindow;
-use super::pid::{self, PidController, fps_norm};
+use super::pid::{PidController, fps_norm};
 use super::policy_controller::PolicyController;
 
 // ════════════════════════════════════════════════════════════════

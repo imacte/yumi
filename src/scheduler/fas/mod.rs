@@ -25,4 +25,3 @@ mod pid_jank;
 mod policy_mgmt;
 
 pub use controller::FasController;
-pub use policy_controller::PolicyController;
