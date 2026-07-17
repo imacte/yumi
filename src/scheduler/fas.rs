@@ -1021,6 +1021,13 @@ impl FasController {
             freqs.sort_unstable();
             freqs.dedup();
 
+            // 合并 boost 频率（部分平台额外暴露的高频点），去重排序
+            if !policy.boost_frequencies.is_empty() {
+                freqs.extend(&policy.boost_frequencies);
+                freqs.sort_unstable();
+                freqs.dedup();
+            }
+
             let max_f = *freqs.last().unwrap();
             let mut mw = FastWriter::new(format!(
                 "/sys/devices/system/cpu/cpufreq/policy{}/scaling_max_freq", pid));
