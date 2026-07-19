@@ -18,6 +18,7 @@ fn compile_rust_bpf(manifest_dir: &Path, package_name: &str, out_dir: &Path) -> 
             "--package", package_name,
             "--target", "bpfel-unknown-none",
             "--release",
+            "-Z", "build-std=core",
         ])
         .current_dir(manifest_dir)
         .output()

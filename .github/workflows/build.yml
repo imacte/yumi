@@ -41,8 +41,8 @@ jobs:
       - name: Setup Rust Toolchain
         uses: dtolnay/rust-toolchain@nightly
         with:
-          targets: aarch64-linux-android, bpfel-unknown-none
-          components: rust-src # build-std 需要用到
+          targets: aarch64-linux-android
+          components: rust-src # build-std 需要用到 (含 bpfel-unknown-none)
 
       # 5. 安装 Android NDK
       - name: Setup Android NDK
