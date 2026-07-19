@@ -70,7 +70,12 @@ fn build_ebpf() -> Result<PathBuf, Box<dyn std::error::Error>> {
         .join(profile)
         .join("yumi_ebpf"); // cargo 把 - 转成 _
 
-    Ok(built_obj)
+    // 复制到 OUT_DIR 根下（平铺路径，避免 include_bytes! 子目录访问问题）
+    let flat_path = out_dir.join("bpf_probe.o");
+    std::fs::copy(&built_obj, &flat_path)
+        .unwrap_or_else(|e| panic!("无法复制到 {}: {}", flat_path.display(), e));
+
+    Ok(flat_path)
 }
 
 fn add_path(add: &std::path::Path) -> Result<String, std::env::VarError> {
