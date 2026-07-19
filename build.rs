@@ -47,18 +47,6 @@ fn build_ebpf() -> Result<PathBuf, Box<dyn std::error::Error>> {
         panic!("yumi-ebpf 编译失败");
     }
 
-    // 调试：列出实际编译产物
-    let find = Command::new("find")
-        .arg(target_dir.to_str().unwrap())
-        .arg("-name")
-        .arg("yumi*")
-        .arg("-type")
-        .arg("f")
-        .output();
-    if let Ok(out) = find {
-        println!("cargo:warning=yumi-ebpf find output: {}", String::from_utf8_lossy(&out.stdout).trim());
-    }
-
     // 3. 产物路径（binary crate 直接输出到 <target>/<profile>/<name>，无 deps/hash）
     #[cfg(debug_assertions)]
     let profile = "debug";
@@ -70,12 +58,7 @@ fn build_ebpf() -> Result<PathBuf, Box<dyn std::error::Error>> {
         .join(profile)
         .join("yumi-ebpf"); // binary crate 保留原始包名中的连字符
 
-    // 复制到 OUT_DIR 根下（平铺路径，避免 include_bytes! 子目录访问问题）
-    let flat_path = out_dir.join("bpf_probe.o");
-    std::fs::copy(&built_obj, &flat_path)
-        .unwrap_or_else(|e| panic!("无法复制到 {}: {}", flat_path.display(), e));
-
-    Ok(flat_path)
+    Ok(built_obj)
 }
 
 fn add_path(add: &std::path::Path) -> Result<String, std::env::VarError> {

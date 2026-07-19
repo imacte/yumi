@@ -75,7 +75,16 @@ impl FpsProbe {
     ///
     /// 参照 fas-rs `UprobeHandler::attach_app()`
     fn new(pid: i32) -> Result<Self, anyhow::Error> {
-        let mut bpf = Ebpf::load(include_bytes!(concat!(env!("OUT_DIR"), "/bpf_probe.o")))?;
+        #[cfg(debug_assertions)]
+        let mut bpf = Ebpf::load(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/ebpf_target/bpfel-unknown-none/debug/yumi-ebpf"
+        )))?;
+        #[cfg(not(debug_assertions))]
+        let mut bpf = Ebpf::load(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/ebpf_target/bpfel-unknown-none/release/yumi-ebpf"
+        )))?;
 
         let program: &mut UProbe = bpf.program_mut("handle_frame").unwrap().try_into()?;
         program.load()?;
