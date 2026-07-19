@@ -1,0 +1,12 @@
+[package]
+name = "yumi-ebpf"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "eBPF probes for yumi — frame (uprobe) + CPU load (tracepoint)"
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+aya-ebpf = "0.1.0"
