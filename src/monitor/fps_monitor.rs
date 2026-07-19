@@ -16,8 +16,10 @@
  */
 
 use std::collections::VecDeque;
+use std::mem::size_of;
 use std::num::NonZeroU32;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::ptr;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
@@ -38,7 +40,6 @@ use crate::monitor::app_detect;
 
 /// RingBuf 输出的帧时间戳事件（与 yumi-ebpf 的 FrameTimestampEvent 内存布局一致）
 #[repr(C)]
-#[allow(dead_code)]
 struct FrameTimestampEvent {
     pid: u32,
     ktime_ns: u64,
@@ -132,12 +133,13 @@ impl FpsProbe {
         let mut ring = RingBuf::try_from(ring_map).expect("RingBuf::try_from failed");
 
         while let Some(data) = ring.next() {
-            if data.len() < 12 {
+            if data.len() < size_of::<FrameTimestampEvent>() {
                 continue;
             }
 
-            let _pid = u32::from_ne_bytes(data[0..4].try_into().unwrap());
-            let ktime_ns = u64::from_ne_bytes(data[4..12].try_into().unwrap());
+            // 参照 fas-rs 的 trans()：直接 reinterpret bytes → 结构体
+            let event = unsafe { ptr::read_unaligned(data.as_ptr().cast::<FrameTimestampEvent>()) };
+            let ktime_ns = event.ktime_ns;
 
             // 计算帧间隔 (delta = current - last)
             if let Some(last_ns) = self.last_ktime_ns {
