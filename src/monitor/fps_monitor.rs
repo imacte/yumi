@@ -16,7 +16,8 @@
  */
 
 use std::collections::VecDeque;
-use std::os::unix::io::{AsRawFd, BorrowedFd, RawFd};
+use std::num::NonZeroU32;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
@@ -24,6 +25,7 @@ use aya::Ebpf;
 use aya::include_bytes_aligned;
 use aya::maps::RingBuf;
 use aya::programs::UProbe;
+use aya::programs::uprobe::UProbeScope;
 use log::{debug, info, warn};
 use mio::{Events, Interest, Poll, Token, unix::SourceFd};
 use tokio::sync::watch;
@@ -72,26 +74,27 @@ impl FpsProbe {
     /// 创建一个新的探针，挂载到指定 PID
     ///
     /// 参照 fas-rs `UprobeHandler::attach_app()`
-    fn new(pid: i32, bpf_data: &'static [u8]) -> Result<Self, anyhow::Error> {
-        let mut bpf = Ebpf::load(bpf_data)?;
+    fn new(pid: i32) -> Result<Self, anyhow::Error> {
+        let mut bpf = Ebpf::load(include_bytes_aligned!(concat!(
+            env!("OUT_DIR"),
+            "/ebpf_target/bpfel-unknown-none/release/yumi_ebpf"
+        )))?;
 
         let program: &mut UProbe = bpf.program_mut("handle_frame").unwrap().try_into()?;
         program.load()?;
 
-        // 挂载 uprobe，与 fas-rs 完全相同的符号 + 回退逻辑
+        let scope = UProbeScope::OneProcess(NonZeroU32::new(pid as u32).expect("pid must be > 0"));
         let link = program
             .attach(
-                Some("_ZN7android7Surface11queueBufferEP19ANativeWindowBufferi"),
-                0,
                 "/system/lib64/libgui.so",
-                Some(pid),
+                "_ZN7android7Surface11queueBufferEP19ANativeWindowBufferi",
+                scope,
             )
             .or_else(|_| {
                 program.attach(
-                    Some("_ZN7android7Surface11queueBufferEP19ANativeWindowBufferiPNS_24SurfaceQueueBufferOutputE"),
-                    0,
                     "/system/lib64/libgui.so",
-                    Some(pid),
+                    "_ZN7android7Surface11queueBufferEP19ANativeWindowBufferiPNS_24SurfaceQueueBufferOutputE",
+                    scope,
                 )
             })?;
 
@@ -152,16 +155,6 @@ impl FpsProbe {
     }
 }
 
-// ─── BPF 数据加载 ────────────────────────────────────────
-
-/// 加载嵌入的 BPF 字节码（参照 frame-analyzer 的 `load_bpf` 模式，避免 static 初始化问题）
-fn bpf_data() -> &'static [u8] {
-    include_bytes_aligned!(concat!(
-        env!("OUT_DIR"),
-        "/ebpf_target/bpfel-unknown-none/release/yumi_ebpf"
-    ))
-}
-
 // ─── 主入口 ──────────────────────────────────────────────
 
 pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error> {
@@ -208,7 +201,7 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
 
             // 当前活跃的探针
             let mut probe: Option<FpsProbe> = if initial_pid > 0 {
-                match FpsProbe::new(initial_pid, bpf_data()) {
+                match FpsProbe::new(initial_pid) {
                     Ok(p) => Some(p),
                     Err(e) => {
                         warn!(
@@ -234,8 +227,7 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
             // 注册当前探针的 RingBuf fd 到 mio
             if let Some(ref mut p) = probe {
                 let fd = p.ring_fd();
-                let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-                let mut source = SourceFd(&borrowed);
+                let mut source = SourceFd(&fd);
                 poll.registry()
                     .register(&mut source, token, Interest::READABLE)
                     .expect("mio register");
@@ -255,7 +247,7 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
                         )
                     );
 
-                    match FpsProbe::new(new_pid, bpf_data()) {
+                    match FpsProbe::new(new_pid) {
                         Ok(new_probe) => {
                             // 先挂载新的，再销毁旧的 —— 最小化帧丢失窗口
                             let old_probe = probe.replace(new_probe);
@@ -263,8 +255,7 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
                             // 将 mio 切换到新探针的 RingBuf fd
                             if let Some(ref mut p) = probe {
                                 let fd = p.ring_fd();
-                                let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-                                let mut source = SourceFd(&borrowed);
+                                let mut source = SourceFd(&fd);
                                 let _ = poll.registry().reregister(
                                     &mut source, token, Interest::READABLE,
                                 );
@@ -306,8 +297,7 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
                     poll = Poll::new().expect("mio Poll::new");
                     if let Some(ref mut p) = probe {
                         let fd = p.ring_fd();
-                        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-                        let mut source = SourceFd(&borrowed);
+                        let mut source = SourceFd(&fd);
                         poll.registry()
                             .register(&mut source, token, Interest::READABLE)
                             .expect("mio register");

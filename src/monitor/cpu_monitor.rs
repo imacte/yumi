@@ -44,15 +44,11 @@ fn get_thread_tids(pid: u32) -> Vec<u32> {
     tids
 }
 
-fn bpf_data() -> &'static [u8] {
-    include_bytes_aligned!(concat!(
+pub async fn start_cpu_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error> {
+    let bpf = Box::leak(Box::new(Ebpf::load(include_bytes_aligned!(concat!(
         env!("OUT_DIR"),
         "/ebpf_target/bpfel-unknown-none/release/yumi_ebpf"
-    ))
-}
-
-pub async fn start_cpu_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error> {
-    let bpf = Box::leak(Box::new(Ebpf::load(bpf_data())?));
+    )))?));
     let program: &mut TracePoint = bpf.program_mut("handle_sched_switch").unwrap().try_into()?;
     program.load()?;
     program.attach("sched", "sched_switch")?;
