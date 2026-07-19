@@ -164,7 +164,7 @@ fn try_handle_sched_switch(ctx: &TracePointContext) -> Result<u32, i64> {
 
 /// 向 HashMap 累加 delta（查找然后 +=，不存在则 insert）
 fn add_to_hash(map: &HashMap<u32, u64>, key: u32, delta: u64) {
-    if let Some(ptr) = map.get_ptr_mut(key) {
+    if let Some(ptr) = map.get_ptr_mut(&key) {
         unsafe { *ptr += delta; }
     } else {
         let _ = map.insert(&key, &delta, 0);
