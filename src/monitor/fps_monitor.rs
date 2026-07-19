@@ -62,8 +62,6 @@ struct FpsProbe {
     _link: aya::programs::uprobe::UProbeLinkId,
     /// BPF 程序实例，drop 时自动 unload
     _bpf: Ebpf,
-    /// RingBuf 的 fd，用于 mio 轮询
-    ring_fd: RawFd,
     /// 上一帧的内核时间戳
     last_ktime_ns: Option<u64>,
     /// 最近帧间隔的滑动窗口
@@ -97,8 +95,6 @@ impl FpsProbe {
                 )
             })?;
 
-        let ring_fd = bpf.map_mut("RING_BUF").expect("RING_BUF not found").as_raw_fd();
-
         info!(
             "{}",
             t_with_args("fps-monitor-attached", &fluent_args!("pid" => pid.to_string()))
@@ -107,10 +103,16 @@ impl FpsProbe {
         Ok(Self {
             _link: link,
             _bpf: bpf,
-            ring_fd,
             last_ktime_ns: None,
             frametimes: VecDeque::with_capacity(FRAMETIME_WINDOW),
         })
+    }
+
+    /// 获取 RingBuf fd 用于 mio 轮询（参照 frame-analyzer 的 ring()?.as_raw_fd()）
+    fn ring_fd(&mut self) -> RawFd {
+        let ring_map = self._bpf.map_mut("RING_BUF").expect("RING_BUF not found");
+        let ring = RingBuf::try_from(ring_map).expect("RingBuf::try_from");
+        ring.as_raw_fd()
     }
 
     /// 从 RingBuf 读取所有可用帧事件，更新内部状态
@@ -150,13 +152,19 @@ impl FpsProbe {
     }
 }
 
+// ─── BPF 数据加载 ────────────────────────────────────────
+
+/// 加载嵌入的 BPF 字节码（参照 frame-analyzer 的 `load_bpf` 模式，避免 static 初始化问题）
+fn bpf_data() -> &'static [u8] {
+    include_bytes_aligned!(concat!(
+        env!("OUT_DIR"),
+        "/ebpf_target/bpfel-unknown-none/release/yumi_ebpf"
+    ))
+}
+
 // ─── 主入口 ──────────────────────────────────────────────
 
 pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error> {
-    static BPF_DATA: &[u8] = include_bytes_aligned!(concat!(
-        env!("OUT_DIR"),
-        "/ebpf_target/bpfel-unknown-none/release/yumi_ebpf"
-    ));
     info!("{}", t("fps-monitor-init"));
 
     // 初始 PID
@@ -200,7 +208,7 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
 
             // 当前活跃的探针
             let mut probe: Option<FpsProbe> = if initial_pid > 0 {
-                match FpsProbe::new(initial_pid, BPF_DATA) {
+                match FpsProbe::new(initial_pid, bpf_data()) {
                     Ok(p) => Some(p),
                     Err(e) => {
                         warn!(
@@ -224,16 +232,13 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
             let token = Token(0);
 
             // 注册当前探针的 RingBuf fd 到 mio
-            let register = |poll: &mut Poll, probe: &FpsProbe| {
-                let borrowed = unsafe { BorrowedFd::borrow_raw(probe.ring_fd) };
-                let mut source = SourceFd::new(&borrowed).expect("mio SourceFd::new");
+            if let Some(ref mut p) = probe {
+                let fd = p.ring_fd();
+                let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+                let mut source = SourceFd(&borrowed);
                 poll.registry()
                     .register(&mut source, token, Interest::READABLE)
                     .expect("mio register");
-            };
-
-            if let Some(ref p) = probe {
-                register(&mut poll, p);
             }
 
             loop {
@@ -250,16 +255,19 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
                         )
                     );
 
-                    match FpsProbe::new(new_pid, BPF_DATA) {
+                    match FpsProbe::new(new_pid, bpf_data()) {
                         Ok(new_probe) => {
                             // 先挂载新的，再销毁旧的 —— 最小化帧丢失窗口
                             let old_probe = probe.replace(new_probe);
 
                             // 将 mio 切换到新探针的 RingBuf fd
-                            if let Some(ref p) = probe {
-                                let borrowed = unsafe { BorrowedFd::borrow_raw(p.ring_fd) };
-                                let mut source = SourceFd::new(&borrowed).expect("mio SourceFd::new");
-                                let _ = poll.registry().reregister(&mut source, token, Interest::READABLE);
+                            if let Some(ref mut p) = probe {
+                                let fd = p.ring_fd();
+                                let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+                                let mut source = SourceFd(&borrowed);
+                                let _ = poll.registry().reregister(
+                                    &mut source, token, Interest::READABLE,
+                                );
                             }
 
                             // 显式 drop 旧探针（detach + unload）
@@ -289,7 +297,6 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
                 let timeout = if probe.is_some() {
                     Some(Duration::from_millis(100))
                 } else {
-                    // 没有探针时用较长超时，减少空转
                     Some(Duration::from_millis(500))
                 };
 
@@ -297,8 +304,13 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
                     std::thread::sleep(Duration::from_millis(10));
                     // 如果 poll 出错（比如 kernel fd 失效），重建 poll
                     poll = Poll::new().expect("mio Poll::new");
-                    if let Some(ref p) = probe {
-                        register(&mut poll, p);
+                    if let Some(ref mut p) = probe {
+                        let fd = p.ring_fd();
+                        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+                        let mut source = SourceFd(&borrowed);
+                        poll.registry()
+                            .register(&mut source, token, Interest::READABLE)
+                            .expect("mio register");
                     }
                     continue;
                 }
