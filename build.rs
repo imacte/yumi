@@ -68,7 +68,7 @@ fn build_ebpf() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let built_obj = target_dir
         .join("bpfel-unknown-none")
         .join(profile)
-        .join("yumi_ebpf"); // cargo 把 - 转成 _
+        .join("yumi-ebpf"); // binary crate 保留原始包名中的连字符
 
     // 复制到 OUT_DIR 根下（平铺路径，避免 include_bytes! 子目录访问问题）
     let flat_path = out_dir.join("bpf_probe.o");
