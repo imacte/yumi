@@ -45,7 +45,7 @@ fn get_thread_tids(pid: u32) -> Vec<u32> {
 }
 
 pub async fn start_cpu_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error> {
-    let bpf = Box::leak(Box::new(Ebpf::load(include_bytes_aligned!(concat!(
+    let bpf = Box::leak(Box::new(Ebpf::load(include_bytes!(concat!(
         env!("OUT_DIR"),
         "/ebpf_target/bpfel-unknown-none/release/yumi_ebpf"
     )))?));
