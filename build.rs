@@ -1,68 +1,79 @@
 use std::process::Command;
 use std::env;
-use std::path::Path;
+use std::path::PathBuf;
 
-/// 使用 cargo 编译 Rust eBPF 程序，目标为 bpfel-unknown-none
-fn compile_rust_bpf(manifest_dir: &Path, package_name: &str, out_dir: &Path) -> std::path::PathBuf {
-    let obj_name = format!("{}.o", package_name);
-    let bpf_obj = out_dir.join(&obj_name);
+/// 构建 yumi-ebpf BPF 程序，参照 frame-analyzer 的 build_ebpf()
+fn build_ebpf() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let ebpf_dir = manifest_dir.join("yumi-ebpf");
+    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
+    let target_dir = out_dir.join("ebpf_target");
+    let tools_dir = out_dir.join("ebpf_tools");
+    let tools_bin = tools_dir.join("bin");
 
-    // 监控整个 ebpf crate 的代码变化
-    let ebpf_dir = manifest_dir.join(package_name);
+    // 监控 ebpf crate 变化
     println!("cargo:rerun-if-changed={}", ebpf_dir.join("Cargo.toml").display());
     println!("cargo:rerun-if-changed={}", ebpf_dir.join("src").display());
 
-    let output = Command::new("cargo")
+    // 1. 安装 bpf-linker（参照 frame-analyzer install_ebpf_linker）
+    Command::new("cargo")
         .args([
-            "build",
-            "--package", package_name,
-            "--target", "bpfel-unknown-none",
-            "--release",
-            "-Z", "build-std=core",
+            "install", "bpf-linker", "--force",
+            "--root", tools_dir.to_str().unwrap(),
+            "--target-dir", tools_dir.to_str().unwrap(),
         ])
-        .current_dir(manifest_dir)
-        .output()
-        .unwrap_or_else(|e| panic!("无法执行 cargo build 编译 {}: {}", package_name, e));
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .status()?;
 
-    // 将子 cargo 的 stdout/stderr 转发到父进程，确保 CI 日志可见
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !stdout.is_empty() {
-        eprintln!("[yumi-ebpf stdout]\n{stdout}");
-    }
-    if !stderr.is_empty() {
-        eprintln!("[yumi-ebpf stderr]\n{stderr}");
+    // 2. 编译 BPF 程序（在 yumi-ebpf 目录中，避免 workspace 干扰）
+    let mut ebpf_args = vec![
+        "--target", "bpfel-unknown-none",
+        "-Z", "build-std=core",
+        "--target-dir", target_dir.to_str().unwrap(),
+    ];
+
+    #[cfg(not(debug_assertions))]
+    ebpf_args.push("--release");
+
+    let status = Command::new("cargo")
+        .arg("build")
+        .args(&ebpf_args)
+        .current_dir(&ebpf_dir)
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .env("PATH", add_path(&tools_bin)?)
+        .status()?;
+
+    if !status.success() {
+        panic!("yumi-ebpf 编译失败");
     }
 
-    if !output.status.success() {
-        panic!("Rust eBPF 编译失败: {}!\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}", package_name);
-    }
+    // 3. 产物路径
+    #[cfg(debug_assertions)]
+    let profile = "debug";
+    #[cfg(not(debug_assertions))]
+    let profile = "release";
 
-    // aya 编译产物在 target/bpfel-unknown-none/release/<package_name>
-    let built_obj = manifest_dir
-        .join("target")
+    let built_obj = target_dir
         .join("bpfel-unknown-none")
-        .join("release")
-        .join(package_name);
+        .join(profile)
+        .join("yumi_ebpf"); // cargo 把 - 转成 _
 
-    // 复制到 OUT_DIR 供 include_bytes_aligned! 使用
-    std::fs::copy(&built_obj, &bpf_obj)
-        .unwrap_or_else(|e| panic!("无法复制 eBPF 产物: {} -> {}: {}", built_obj.display(), bpf_obj.display(), e));
+    Ok(built_obj)
+}
 
-    println!("cargo:warning=✅ 成功编译 Rust eBPF 程序: {} -> {}", package_name, obj_name);
-
-    bpf_obj
+fn add_path(add: &std::path::Path) -> Result<String, std::env::VarError> {
+    let path = env::var("PATH")?;
+    Ok(format!("{}:{}", add.display(), path))
 }
 
 fn main() {
-    let out_dir = env::var("OUT_DIR").unwrap();
-    let out_path = Path::new(&out_dir);
-
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-
-    // 统一编译 yumi-ebpf（包含 fps_probe + cpu_probe 两个 BPF 程序）
-    let bpf_obj = compile_rust_bpf(manifest_dir, "yumi-ebpf", out_path);
-
-    // 统一的环境变量，fps_monitor 和 cpu_monitor 共用
-    println!("cargo:rustc-env=BPF_OBJ_PATH={}", bpf_obj.display());
+    match build_ebpf() {
+        Ok(bpf_obj) => {
+            println!("cargo:warning=✅ yumi-ebpf 编译成功: {}", bpf_obj.display());
+            println!("cargo:rustc-env=BPF_OBJ_PATH={}", bpf_obj.display());
+        }
+        Err(e) => {
+            panic!("yumi-ebpf 编译失败: {e}");
+        }
+    }
 }
