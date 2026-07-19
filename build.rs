@@ -47,6 +47,18 @@ fn build_ebpf() -> Result<PathBuf, Box<dyn std::error::Error>> {
         panic!("yumi-ebpf 编译失败");
     }
 
+    // 调试：列出实际编译产物
+    let find = Command::new("find")
+        .arg(target_dir.to_str().unwrap())
+        .arg("-name")
+        .arg("yumi*")
+        .arg("-type")
+        .arg("f")
+        .output();
+    if let Ok(out) = find {
+        println!("cargo:warning=yumi-ebpf find output: {}", String::from_utf8_lossy(&out.stdout).trim());
+    }
+
     // 3. 产物路径
     #[cfg(debug_assertions)]
     let profile = "debug";
