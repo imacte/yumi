@@ -70,7 +70,6 @@ fn main() {
     match build_ebpf() {
         Ok(bpf_obj) => {
             println!("cargo:warning=✅ yumi-ebpf 编译成功: {}", bpf_obj.display());
-            println!("cargo:rustc-env=BPF_OBJ_PATH={}", bpf_obj.display());
         }
         Err(e) => {
             panic!("yumi-ebpf 编译失败: {e}");

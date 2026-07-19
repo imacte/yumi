@@ -59,7 +59,7 @@ const FRAMETIME_WINDOW: usize = 144;
 /// - Drop 时自动 detach + unload
 struct FpsProbe {
     /// uprobe 挂载句柄，drop 时自动 detach
-    _link: aya::programs::UProbeLinkId,
+    _link: aya::programs::uprobe::UProbeLinkId,
     /// BPF 程序实例，drop 时自动 unload
     _bpf: Ebpf,
     /// RingBuf 的 fd，用于 mio 轮询
@@ -97,7 +97,7 @@ impl FpsProbe {
                 )
             })?;
 
-        let ring_fd = bpf.map("RING_BUF").expect("RING_BUF not found").as_raw_fd();
+        let ring_fd = bpf.map_mut("RING_BUF").expect("RING_BUF not found").as_raw_fd();
 
         info!(
             "{}",
@@ -153,7 +153,10 @@ impl FpsProbe {
 // ─── 主入口 ──────────────────────────────────────────────
 
 pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error> {
-    static BPF_DATA: &[u8] = include_bytes_aligned!(env!("BPF_OBJ_PATH"));
+    static BPF_DATA: &[u8] = include_bytes_aligned!(concat!(
+        env!("OUT_DIR"),
+        "/ebpf_target/bpfel-unknown-none/release/yumi_ebpf"
+    ));
     info!("{}", t("fps-monitor-init"));
 
     // 初始 PID
