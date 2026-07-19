@@ -46,7 +46,7 @@ pub fn handle_frame(ctx: ProbeContext) -> u32 {
 }
 
 fn try_handle_frame(_ctx: ProbeContext) -> Result<u32, u32> {
-    let pid_tgid = unsafe { bpf_get_current_pid_tgid() };
+    let pid_tgid = bpf_get_current_pid_tgid();
     let pid = (pid_tgid >> 32) as u32;
     let ktime_ns = unsafe { bpf_ktime_get_ns() };
 
@@ -109,7 +109,7 @@ const NS_10_SEC: u64 = 10_000_000_000;
 pub fn handle_sched_switch(ctx: TracePointContext) -> u32 {
     match try_handle_sched_switch(&ctx) {
         Ok(ret) => ret,
-        Err(ret) => ret,
+        Err(ret) => ret as u32,
     }
 }
 
@@ -120,23 +120,23 @@ fn try_handle_sched_switch(ctx: &TracePointContext) -> Result<u32, i64> {
     let next_tid: i32 = unsafe { ctx.read_at(OFF_NEXT_PID)? };
 
     // bpf_get_current_pid_tgid() 在 sched_switch 中返回 **next** 任务的 pid_tgid
-    let pid_tgid = unsafe { bpf_get_current_pid_tgid() };
+    let pid_tgid = bpf_get_current_pid_tgid();
     let next_tgid = (pid_tgid >> 32) as u32;
 
     // ── 计算上一个任务的耗时并累加 ──
-    if let Some(last_ts_ptr) = CORE_LAST_TIME.get_ptr_mut(&ZERO_KEY) {
+    if let Some(last_ts_ptr) = CORE_LAST_TIME.get_ptr_mut(ZERO_KEY) {
         let last_ts = unsafe { *last_ts_ptr };
         let delta = now.saturating_sub(last_ts);
 
         if delta > 0 && delta < NS_10_SEC {
             if prev_tid == 0 {
                 // Idle 时间
-                if let Some(idle_ptr) = CORE_IDLE_TIME.get_ptr_mut(&ZERO_KEY) {
+                if let Some(idle_ptr) = CORE_IDLE_TIME.get_ptr_mut(ZERO_KEY) {
                     unsafe { *idle_ptr += delta; }
                 }
             } else {
                 // Busy 时间
-                if let Some(busy_ptr) = CORE_BUSY_TIME.get_ptr_mut(&ZERO_KEY) {
+                if let Some(busy_ptr) = CORE_BUSY_TIME.get_ptr_mut(ZERO_KEY) {
                     unsafe { *busy_ptr += delta; }
                 }
 
@@ -144,7 +144,7 @@ fn try_handle_sched_switch(ctx: &TracePointContext) -> Result<u32, i64> {
                 add_to_hash(&THREAD_RUN_TIME, prev_tid as u32, delta);
 
                 // TGID 级聚合累计：prev 任务的 TGID 从 CORE_CURRENT_TGID 读取
-                if let Some(prev_tgid_ptr) = CORE_CURRENT_TGID.get_ptr_mut(&ZERO_KEY) {
+                if let Some(prev_tgid_ptr) = CORE_CURRENT_TGID.get_ptr_mut(ZERO_KEY) {
                     let prev_tgid = unsafe { *prev_tgid_ptr };
                     if prev_tgid > 0 {
                         add_to_hash(&TGID_RUN_TIME, prev_tgid, delta);
@@ -164,7 +164,7 @@ fn try_handle_sched_switch(ctx: &TracePointContext) -> Result<u32, i64> {
 
 /// 向 HashMap 累加 delta（查找然后 +=，不存在则 insert）
 fn add_to_hash(map: &HashMap<u32, u64>, key: u32, delta: u64) {
-    if let Some(ptr) = map.get_ptr_mut(&key) {
+    if let Some(ptr) = map.get_ptr_mut(key) {
         unsafe { *ptr += delta; }
     } else {
         let _ = map.insert(&key, &delta, 0);
@@ -173,7 +173,7 @@ fn add_to_hash(map: &HashMap<u32, u64>, key: u32, delta: u64) {
 
 /// 更新 PerCpuArray 中 key 对应的值
 fn update_percpu<T: Copy>(map: &PerCpuArray<T>, key: &u32, val: &T) {
-    if let Some(ptr) = map.get_ptr_mut(key) {
+    if let Some(ptr) = map.get_ptr_mut(*key) {
         unsafe { *ptr = *val; }
     }
 }
