@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use aya::{Ebpf, include_bytes_aligned, programs::TracePoint};
+use aya::{Ebpf, programs::TracePoint};
 use aya::maps::{PerCpuArray, HashMap as BpfHashMap};
 use aya::util::online_cpus;
 use std::sync::mpsc::Sender;

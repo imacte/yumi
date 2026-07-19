@@ -22,7 +22,6 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use aya::Ebpf;
-use aya::include_bytes_aligned;
 use aya::maps::RingBuf;
 use aya::programs::UProbe;
 use aya::programs::uprobe::UProbeScope;
@@ -39,6 +38,7 @@ use crate::monitor::app_detect;
 
 /// RingBuf 输出的帧时间戳事件（与 yumi-ebpf 的 FrameTimestampEvent 内存布局一致）
 #[repr(C)]
+#[allow(dead_code)]
 struct FrameTimestampEvent {
     pid: u32,
     ktime_ns: u64,
@@ -203,7 +203,7 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
     std::thread::Builder::new()
         .name("fps_probe".into())
         .spawn(move || {
-            let rt = tokio::runtime::Handle::current();
+            let _rt = tokio::runtime::Handle::current();
 
             // 当前活跃的探针
             let mut probe: Option<FpsProbe> = if initial_pid > 0 {
