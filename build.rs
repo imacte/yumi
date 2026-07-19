@@ -70,6 +70,25 @@ fn build_ebpf() -> Result<PathBuf, Box<dyn std::error::Error>> {
         .join(profile)
         .join("yumi_ebpf"); // cargo 把 - 转成 _
 
+    // 如果主路径不存在（cargo 可能放进 deps/ 并加 hash），搜索 deps/ 目录
+    let built_obj = if built_obj.exists() {
+        built_obj
+    } else {
+        let deps_dir = target_dir.join("bpfel-unknown-none").join(profile).join("deps");
+        let mut found = None;
+        if let Ok(entries) = std::fs::read_dir(&deps_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with("yumi_ebpf-") && !name_str.ends_with(".d") {
+                    found = Some(entry.path());
+                    break;
+                }
+            }
+        }
+        found.unwrap_or_else(|| panic!("找不到 yumi-ebpf 编译产物，目录: {}", deps_dir.display()))
+    };
+
     // 复制到 OUT_DIR 根下（平铺路径，避免 include_bytes! 子目录访问问题）
     let flat_path = out_dir.join("bpf_probe.o");
     std::fs::copy(&built_obj, &flat_path)
