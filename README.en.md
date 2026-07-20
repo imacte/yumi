@@ -177,11 +177,11 @@ FAS parameters are configured in the `fas_rules` section of `rules.yaml`:
 ```yaml
 fas_rules:
   fps_gears: [30.0, 60.0, 90.0, 120.0, 144.0]
-  fps_margin: "3.0"
+  fps_margin: 3.0
 
   pid:
-    kp: 0.050
-    ki: 0.010
+    kp: 0.05
+    ki: 0.01
     kd: 0.006
 
   auto_capacity_weight: true
@@ -194,12 +194,35 @@ fas_rules:
 
   heavy_frame_threshold_ms: 150.0
   loading_cumulative_ms: 2500.0
+  loading_normal_tolerance: 3
+  loading_perf_floor: 0.60
+  loading_perf_ceiling: 0.70
   post_loading_ignore_frames: 5
   post_loading_perf: 0.65
+  post_loading_downgrade_guard: 90
 
-  core_temp_threshold: 0.0
-  core_temp_throttle_perf: 0.70
-  util_cap_divisor: 0.45
+  upgrade_confirm_frames: 60
+  downgrade_confirm_frames: 90
+  upgrade_cooldown_after_downgrade: 90
+  gear_dampen_frames: 60
+  downgrade_boost_perf_inc: 0.18
+  downgrade_boost_duration: 45
+
+  fast_decay_frame_threshold: 75
+  fast_decay_perf_threshold: 0.70
+  fast_decay_max_step: 0.022
+  fast_decay_min_step: 0.004
+
+  jank_cooldown_frames: 15
+  max_inc_damped: 0.045
+  max_inc_normal: 0.075
+  damped_perf_cap: 0.92
+
+  app_switch_gap_ms: 3000.0
+  app_switch_resume_perf: 0.60
+  freq_force_reapply_interval: 30
+  fixed_max_frame_ms: 500.0
+  cold_boot_ms: 3500
 
   per_app_profiles:
     "com.miHoYo.GenshinImpact":
@@ -229,6 +252,25 @@ fas_rules:
 | `core_temp_threshold` | float | 0.0 | Temperature throttling threshold (°C). 0 = disabled. |
 | `core_temp_throttle_perf` | float | 0.70 | Performance ceiling during temperature throttling. |
 | `util_cap_divisor` | float | 0.45 | Divisor for CPU load-assisted frequency scaling (smaller = more aggressive throttling). |
+| `upgrade_confirm_frames` | int | 60 | Consecutive frames meeting target before gear upgrade is executed. |
+| `downgrade_confirm_frames` | int | 90 | Consecutive frames below target before gear downgrade is executed. |
+| `upgrade_cooldown_after_downgrade` | int | 90 | Upgrade cooldown frames after a downgrade, preventing gear oscillation. |
+| `gear_dampen_frames` | int | 60 | Dampen frames after gear switch; no new gear switch during this period. |
+| `downgrade_boost_perf_inc` | float | 0.18 | Emergency perf boost increment before a downgrade. |
+| `downgrade_boost_duration` | int | 45 | Duration (frames) of the emergency boost before a downgrade. |
+| `fast_decay_frame_threshold` | int | 75 | Consecutive normal frames threshold to trigger fast decay. |
+| `fast_decay_perf_threshold` | float | 0.70 | Perf threshold below which fast decay is suppressed. |
+| `fast_decay_max_step` | float | 0.022 | Maximum fast decay step size. |
+| `fast_decay_min_step` | float | 0.004 | Minimum fast decay step size. |
+| `jank_cooldown_frames` | int | 15 | Jank cooldown frames; maintains higher frequency during cooldown. |
+| `max_inc_damped` | float | 0.045 | Maximum PID output in damped state. |
+| `max_inc_normal` | float | 0.075 | Maximum PID output in normal state. |
+| `damped_perf_cap` | float | 0.92 | Perf ceiling in damped state. |
+| `app_switch_gap_ms` | float | 3000.0 | App switch detection interval (ms). Frame gaps exceeding this are treated as app switches. |
+| `app_switch_resume_perf` | float | 0.60 | Recovery perf after an app switch. |
+| `freq_force_reapply_interval` | int | 30 | Frequency force-reapply interval in frames. |
+| `fixed_max_frame_ms` | float | 500.0 | Maximum frame interval (ms). Frames exceeding this are ignored. |
+| `cold_boot_ms` | int | 3500 | Cold boot duration (ms). Uses perf_cold_boot during this period. |
 | `per_app_profiles` | map | {} | Per-game configuration, supporting `target_fps` and `fps_margin`. |
 
 -----
@@ -301,12 +343,13 @@ Each performance mode can independently configure CPU Load Governor (CLG) parame
 
 ```yaml
 balance:
-  CpuLoadGovernor:
+  cpu_load_governor:
     up_threshold: 0.80
     down_threshold: 0.50
     smoothing_up: 0.60
     smoothing_down: 0.30
     down_rate_limit_ticks: 3
+    up_rate_limit_ticks: 2
     headroom_factor: 1.25
     perf_floor: 0.15
     perf_ceil: 1.0
@@ -320,7 +363,8 @@ balance:
 | `smoothing_up` | float | 0.60 | Ramp-up smoothing coefficient (larger = faster). |
 | `smoothing_down` | float | 0.30 | Ramp-down smoothing coefficient (larger = faster). |
 | `down_rate_limit_ticks` | int | 3 | Ramp-down rate limit (in ticks, each tick = 200ms). |
-| `headroom_factor` | float | 1.25 | Target perf = actual load × headroom, providing frequency margin. |
+| `up_rate_limit_ticks` | int | 2 | Ramp-up rate limit (in ticks). Boost only after N consecutive high-load ticks to prevent transient spikes. |
+| `headroom_factor` | float | 1.25 | Target perf = actual load × headroom, providing frequency margin. Only applied when load ≥ up_threshold. |
 | `perf_floor` | float | 0.15 | Performance floor. |
 | `perf_ceil` | float | 1.0 | Performance ceiling. |
 | `perf_init` | float | 0.50 | Initial performance value. |
@@ -331,7 +375,7 @@ balance:
 
 yumi uses two eBPF probes for kernel-level data collection:
 
-#### CPU Probe (`cpu_probe.c`)
+#### CPU Probe (`yumi-ebpf`)
 
 Attached to `tracepoint/sched/sched_switch`, triggered on every context switch, recording:
 
@@ -339,13 +383,13 @@ Attached to `tracepoint/sched/sched_switch`, triggered on every context switch, 
   * **Per-core current TID**: Used by userspace to compensate in real time for tasks that haven't yet triggered a sched_switch.
   * **Thread runtime**: Recorded per-thread cumulative CPU time via `HASH` map, used to compute the foreground app's heaviest thread utilization.
 
-#### FPS Probe (`fps_probe.c`)
+#### FPS Probe (`yumi-ebpf`)
 
-Attached to `libgui.so`'s `queueBuffer` function (uprobe), triggered on every frame submission:
+Attached to `libgui.so`'s `Surface::queueBuffer` function (uprobe), triggered on every frame submission:
 
-  * **Kernel-side PID filtering**: Only sends perf events for the target process via the `target_pid` map, reducing overhead from unrelated processes.
-  * **Frame interval calculation**: Records the timestamp delta between each `queueBuffer` call, transmitted to userspace via `PERF_EVENT_ARRAY` with zero-copy.
-  * **Baseline preheating**: Records timestamps even for non-target processes, ensuring the first frame after a PID switch can compute a correct delta.
+  * **Kernel-side timestamp capture**: Records frame submission time via `bpf_ktime_get_ns()` in eBPF, transmitted to userspace via RingBuf with zero-copy.
+  * **Per-PID uprobe attachment**: Each target process holds an independent eBPF instance. On PID switch, the old instance is automatically detached and a new one attached to the new PID, ensuring only the target process's frame events are captured.
+  * **Userspace frame interval calculation**: Userspace reads consecutive frame timestamps from RingBuf, computes deltas, and filters abnormal frame intervals (1ms–200ms).
 
 -----
 

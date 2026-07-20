@@ -177,11 +177,11 @@ FAS 的参数通过 `rules.yaml` 中的 `fas_rules` 节进行配置：
 ```yaml
 fas_rules:
   fps_gears: [30.0, 60.0, 90.0, 120.0, 144.0]
-  fps_margin: "3.0"
+  fps_margin: 3.0
 
   pid:
-    kp: 0.050
-    ki: 0.010
+    kp: 0.05
+    ki: 0.01
     kd: 0.006
 
   auto_capacity_weight: true
@@ -194,12 +194,35 @@ fas_rules:
 
   heavy_frame_threshold_ms: 150.0
   loading_cumulative_ms: 2500.0
+  loading_normal_tolerance: 3
+  loading_perf_floor: 0.60
+  loading_perf_ceiling: 0.70
   post_loading_ignore_frames: 5
   post_loading_perf: 0.65
+  post_loading_downgrade_guard: 90
 
-  core_temp_threshold: 0.0
-  core_temp_throttle_perf: 0.70
-  util_cap_divisor: 0.45
+  upgrade_confirm_frames: 60
+  downgrade_confirm_frames: 90
+  upgrade_cooldown_after_downgrade: 90
+  gear_dampen_frames: 60
+  downgrade_boost_perf_inc: 0.18
+  downgrade_boost_duration: 45
+
+  fast_decay_frame_threshold: 75
+  fast_decay_perf_threshold: 0.70
+  fast_decay_max_step: 0.022
+  fast_decay_min_step: 0.004
+
+  jank_cooldown_frames: 15
+  max_inc_damped: 0.045
+  max_inc_normal: 0.075
+  damped_perf_cap: 0.92
+
+  app_switch_gap_ms: 3000.0
+  app_switch_resume_perf: 0.60
+  freq_force_reapply_interval: 30
+  fixed_max_frame_ms: 500.0
+  cold_boot_ms: 3500
 
   per_app_profiles:
     "com.miHoYo.GenshinImpact":
@@ -229,6 +252,25 @@ fas_rules:
 | `core_temp_threshold` | float | 0.0 | 温度降频阈值（℃），0 = 禁用。 |
 | `core_temp_throttle_perf` | float | 0.70 | 温度降频时的 perf 上限。 |
 | `util_cap_divisor` | float | 0.45 | CPU 负载辅助调频的除数（越小越激进地限频）。 |
+| `upgrade_confirm_frames` | int | 60 | 升档确认帧数，连续 N 帧达标才执行升档。 |
+| `downgrade_confirm_frames` | int | 90 | 降档确认帧数，连续 N 帧不达标才执行降档。 |
+| `upgrade_cooldown_after_downgrade` | int | 90 | 降档后升档冷却帧数，防止档位震荡。 |
+| `gear_dampen_frames` | int | 60 | 档位切换后阻尼帧数，期间不触发新档位切换。 |
+| `downgrade_boost_perf_inc` | float | 0.18 | 降档前紧急提频的 perf 增量。 |
+| `downgrade_boost_duration` | int | 45 | 降档前紧急提频持续帧数。 |
+| `fast_decay_frame_threshold` | int | 75 | 快速衰减触发阈值（连续正常帧数）。 |
+| `fast_decay_perf_threshold` | float | 0.70 | 快速衰减 perf 阈值，perf 低于此值不衰减。 |
+| `fast_decay_max_step` | float | 0.022 | 快速衰减最大步长。 |
+| `fast_decay_min_step` | float | 0.004 | 快速衰减最小步长。 |
+| `jank_cooldown_frames` | int | 15 | 卡顿冷却帧数，冷却期内维持较高频率。 |
+| `max_inc_damped` | float | 0.045 | 阻尼状态下的 PID 输出上限。 |
+| `max_inc_normal` | float | 0.075 | 正常状态下的 PID 输出上限。 |
+| `damped_perf_cap` | float | 0.92 | 阻尼状态的 perf 上限。 |
+| `app_switch_gap_ms` | float | 3000.0 | 应用切换判定间隔（ms），帧间隔超过此值视为切换。 |
+| `app_switch_resume_perf` | float | 0.60 | 应用切换后的恢复 perf。 |
+| `freq_force_reapply_interval` | int | 30 | 频率强制重新写入的帧间隔数。 |
+| `fixed_max_frame_ms` | float | 500.0 | 帧间隔上限（ms），超过此值的帧忽略。 |
+| `cold_boot_ms` | int | 3500 | 冷启动期（ms），期间使用 perf_cold_boot。 |
 | `per_app_profiles` | map | {} | 每个游戏的独立配置，支持 `target_fps` 和 `fps_margin`。 |
 
 -----
@@ -301,12 +343,13 @@ CpuIdle:
 
 ```yaml
 balance:
-  CpuLoadGovernor:
+  cpu_load_governor:
     up_threshold: 0.80
     down_threshold: 0.50
     smoothing_up: 0.60
     smoothing_down: 0.30
     down_rate_limit_ticks: 3
+    up_rate_limit_ticks: 2
     headroom_factor: 1.25
     perf_floor: 0.15
     perf_ceil: 1.0
@@ -320,7 +363,8 @@ balance:
 | `smoothing_up` | float | 0.60 | 升频平滑系数（越大越快）。 |
 | `smoothing_down` | float | 0.30 | 降频平滑系数（越大越快）。 |
 | `down_rate_limit_ticks` | int | 3 | 降频速率限制（tick 数，每 tick 200ms）。 |
-| `headroom_factor` | float | 1.25 | 目标性能 = 实际负载 × headroom，提供频率余量。 |
+| `up_rate_limit_ticks` | int | 2 | 升频速率限制（tick 数）。连续 N tick 高负载才升频，防止瞬时毛刺。 |
+| `headroom_factor` | float | 1.25 | 目标性能 = 实际负载 × headroom，提供频率余量。仅在负载≥up_threshold 时生效。 |
 | `perf_floor` | float | 0.15 | 性能下限。 |
 | `perf_ceil` | float | 1.0 | 性能上限。 |
 | `perf_init` | float | 0.50 | 初始性能值。 |
@@ -331,7 +375,7 @@ balance:
 
 yumi 使用两个 eBPF 探针进行内核级数据采集：
 
-#### CPU 探针 (`cpu_probe.c`)
+#### CPU 探针 (`yumi-ebpf`)
 
 挂载到 `tracepoint/sched/sched_switch`，在每次上下文切换时触发，记录：
 
@@ -339,13 +383,13 @@ yumi 使用两个 eBPF 探针进行内核级数据采集：
   * **每核心当前 TID**: 用于用户态实时补偿尚未触发 sched_switch 的任务时间。
   * **线程运行时间**: 通过 `HASH` map 记录每个线程的累计 CPU 时间，用于计算前台应用最重线程利用率。
 
-#### FPS 探针 (`fps_probe.c`)
+#### FPS 探针 (`yumi-ebpf`)
 
-挂载到 `libgui.so` 的 `queueBuffer` 函数（uprobe），在每帧渲染提交时触发：
+挂载到 `libgui.so` 的 `Surface::queueBuffer` 函数（uprobe），在每帧渲染提交时触发：
 
-  * **内核侧 PID 过滤**: 通过 `target_pid` map 只对目标进程发送 perf event，减少无关进程的开销。
-  * **帧间隔计算**: 记录每次 `queueBuffer` 的时间戳差值，通过 `PERF_EVENT_ARRAY` 零拷贝传输到用户态。
-  * **基线预热**: 即使非目标进程也会记录时间戳，确保 PID 切换后第一帧就能算出正确的 delta。
+  * **内核侧时间戳采集**: 在 eBPF 中通过 `bpf_ktime_get_ns()` 记录帧提交时间，通过 RingBuf 零拷贝传输到用户态。
+  * **per-PID uprobe 挂载**: 每个目标进程持有独立的 eBPF 实例，PID 切换时自动 detach 旧实例并 attach 新实例，确保只捕获目标进程的帧事件。
+  * **用户态帧间隔计算**: 用户态在 RingBuf 中读取连续帧时间戳，计算 delta，过滤异常帧间隔（1ms~200ms）。
 
 -----
 
