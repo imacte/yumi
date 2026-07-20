@@ -230,12 +230,14 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
             let token = Token(0);
 
             // 注册当前探针的 RingBuf fd 到 mio
+            let mut fd_registered = false;
             if let Some(ref mut p) = probe {
                 let fd = p.ring_fd();
                 let mut source = SourceFd(&fd);
                 poll.registry()
                     .register(&mut source, token, Interest::READABLE)
                     .expect("mio register");
+                fd_registered = true;
             }
 
             loop {
@@ -261,9 +263,16 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
                             if let Some(ref mut p) = probe {
                                 let fd = p.ring_fd();
                                 let mut source = SourceFd(&fd);
-                                let _ = poll.registry().reregister(
-                                    &mut source, token, Interest::READABLE,
-                                );
+                                if fd_registered {
+                                    let _ = poll.registry().reregister(
+                                        &mut source, token, Interest::READABLE,
+                                    );
+                                } else {
+                                    poll.registry()
+                                        .register(&mut source, token, Interest::READABLE)
+                                        .expect("mio register");
+                                    fd_registered = true;
+                                }
                             }
 
                             // 显式 drop 旧探针（detach + unload）
