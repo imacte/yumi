@@ -6,4 +6,4 @@ license = "GPL-3.0-or-later"
 description = "eBPF probes for yumi — frame (uprobe) + CPU load (tracepoint)"
 
 [dependencies]
-aya-ebpf = "0.1.0"
+aya-ebpf = "0.2.1"
