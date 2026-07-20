@@ -318,10 +318,8 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
 
                     // 发送最新帧间隔
                     if let Some(delta) = p.latest_frametime() {
-                        let fps = 1_000_000_000.0 / (delta.as_nanos() as f64);
                         if tx_clone
                             .send(DaemonEvent::FrameUpdate {
-                                fps: fps as f32,
                                 frame_delta_ns: delta.as_nanos() as u64,
                             })
                             .is_err()

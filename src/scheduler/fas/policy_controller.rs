@@ -101,17 +101,6 @@ impl PolicyController {
         self.do_verify_freq(target_freq);
     }
 
-    /// 松散写入 (min=lowest, max=target)，用于非关键 cluster 或负载较低时
-    #[allow(dead_code)]
-    pub fn apply_freq_relaxed(&mut self, target_freq: u32) {
-        if self.ignore_write { return; }
-        let min_f = self.available_freqs[0];
-        self.min_writer.write_value_force(min_f);
-        self.max_writer.write_value_force(target_freq);
-        self.current_freq = target_freq;
-        self.freq_hold_frames = 2;
-    }
-
     fn do_verify_freq(&mut self, write_freq: u32) {
         // 缩短校验间隔：3秒→1.5秒，更快发现内核频率覆写
         // 日志中104次freq mismatch说明内核覆写非常频繁
@@ -133,8 +122,6 @@ impl PolicyController {
                         )));
                         self.max_writer.re_unmount();
                         self.min_writer.re_unmount();
-                        self.max_writer.invalidate();
-                        self.min_writer.invalidate();
                         if write_freq >= actual {
                             self.max_writer.write_value_force(write_freq);
                             self.min_writer.write_value_force(write_freq);
@@ -161,8 +148,6 @@ impl PolicyController {
         if self.ignore_write { return; }
         self.max_writer.re_unmount();
         self.min_writer.re_unmount();
-        self.max_writer.invalidate();
-        self.min_writer.invalidate();
         self.min_writer.write_value_force(self.current_freq);
         self.max_writer.write_value_force(self.current_freq);
     }

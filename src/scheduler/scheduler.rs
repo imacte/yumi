@@ -16,14 +16,14 @@
  */
 
 use super::config::Config;
-use super::utils::SysPathExist;
 use anyhow::Result;
 use std::fs;
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::i18n::{t, t_with_args};
 use crate::fluent_args; 
-use crate::utils; 
+use crate::utils;
+use crate::utils::SysPathExist;
 
 pub struct CpuScheduler {
     config: Arc<RwLock<Config>>,
@@ -42,27 +42,6 @@ impl CpuScheduler {
             current_mode_name: initial_mode,
             sys_path_exist,
         }
-    }
-
-    /// 应用所有与当前性能模式相关的设置 (非频率)
-    pub fn apply_all_settings(&self) -> Result<()> {
-        let mode_name = self.current_mode_name.lock().unwrap().clone();
-
-        if mode_name == "fas" {
-            log::debug!("Currently in FAS mode, Scheduler is skipping static settings application.");
-            return Ok(());
-        }
-
-        log::info!("{}", t_with_args(
-            "apply-settings-for-mode",
-            &fluent_args!{"mode" => mode_name.as_str()}
-        ));
-            
-        log::info!("{}", t_with_args(
-            "settings-applied-success",
-            &fluent_args!{"mode" => mode_name.as_str()}
-        ));
-        Ok(())
     }
 
     /// 应用所有一次性的、与模式无关的系统调整

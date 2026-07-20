@@ -44,21 +44,9 @@ pub fn write_to_file<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, content: C) -> Res
     Ok(())
 }
 
-pub fn write_to_file_no_perm_change<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, content: C) -> Result<()> {
-    fs::write(path.as_ref(), content)?;
-    Ok(())
-}
-
 // 尝试写入内容 (不抛出错误，只记录警告)
 pub fn try_write_file<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, content: C) -> Result<()> {
     if let Err(e) = write_to_file(path.as_ref(), content) {
-        log::warn!("Failed to write to {}: {}.", path.as_ref().display(), e);
-    }
-    Ok(())
-}
-
-pub fn try_write_file_no_perm<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, content: C) -> Result<()> {
-    if let Err(e) = write_to_file_no_perm_change(path.as_ref(), content) {
         log::warn!("Failed to write to {}: {}.", path.as_ref().display(), e);
     }
     Ok(())
@@ -186,7 +174,6 @@ impl SysPathExist {
 
 pub struct FastWriter {
     file: Option<File>,
-    last_value: Option<u32>,
     buf: [u8; 20],
     path: PathBuf,
 }
@@ -199,7 +186,7 @@ impl FastWriter {
         let file = OpenOptions::new().write(true).open(path_ref)
             .map_err(|e| log::error!("{}", t_with_args("sysfs-open-failed", &fluent_args!("path" => path_ref.display().to_string(), "error" => e.to_string()))))
             .ok();
-        Self { file, last_value: None, buf: [0u8; 20], path: path_ref.to_path_buf() }
+        Self { file, buf: [0u8; 20], path: path_ref.to_path_buf() }
     }
 
     fn try_unmount(path: &Path) {
@@ -219,17 +206,10 @@ impl FastWriter {
 
     pub fn re_unmount(&self) { Self::try_unmount(&self.path); }
 
-    #[allow(dead_code)]
-    pub fn write_value(&mut self, value: u32) -> bool {
-        if self.last_value == Some(value) { return true; }
-        self.do_write(value)
-    }
-
     pub fn write_value_force(&mut self, value: u32) -> bool {
         self.do_write(value)
     }
 
-    pub fn invalidate(&mut self) { self.last_value = None; }
     pub fn is_valid(&self) -> bool { self.file.is_some() }
 
     fn do_write(&mut self, value: u32) -> bool {

@@ -31,8 +31,6 @@ pub enum DaemonEvent {
     },
     /// 高频事件：eBPF 捕获到的底层渲染帧数据
     FrameUpdate {
-        #[allow(dead_code)]
-        fps: f32,
         frame_delta_ns: u64, // 纳秒级帧间隔
     },
     /// eBPF 全局系统负载更新 (每 X 毫秒触发一次)

@@ -143,9 +143,6 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
                         log::info!("{}", t("config-reloaded-success"));
 
                         let scheduler = CpuScheduler::new(config_clone.clone(), mode_clone.clone(), sys_path_clone.clone());
-                        if let Err(e) = scheduler.apply_all_settings() {
-                            log::error!("{}", t_with_args("config-apply-mode-failed", &fluent_args!("error" => e.to_string())));
-                        }
                         if let Err(e) = scheduler.apply_system_tweaks() {
                             log::error!("{}", t_with_args("config-apply-tweaks-failed", &fluent_args!("error" => e.to_string())));
                         }
@@ -187,11 +184,6 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
 
             let temp_sensor_path = crate::utils::find_cpu_temp_path().unwrap_or_default();
             let mut last_temp_update = Instant::now();
-
-            let apply_static_mode = |config: &Arc<RwLock<Config>>, mode: &Arc<Mutex<String>>, sys_path: &Arc<utils::SysPathExist>| {
-                let scheduler = CpuScheduler::new(config.clone(), mode.clone(), sys_path.clone());
-                if let Err(e) = scheduler.apply_all_settings() { log::error!("{}", t_with_args("scheduler-apply-failed", &fluent_args!("error" => e.to_string()))); }
-            };
 
             let get_clg_cfg = |config: &Config, mode: &str| -> crate::scheduler::config::CpuLoadGovernorConfig {
                 config.get_mode(mode).map(|m| m.cpu_load_governor.clone()).unwrap_or_default()
@@ -310,8 +302,6 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
                                     fas_suspended_package.clear();
                                 }
 
-                                apply_static_mode(&config_clone, &mode_clone, &sys_path_clone);
-
                                 // 仅在亮屏时处理 CLG。如果息屏，Doze 配置仍在生效，这里不能覆盖它
                                 if is_screen_on {
                                     let config_lock = config_clone.read().unwrap();
@@ -343,7 +333,7 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
                     },
 
                     // --- 4. 帧率事件 (eBPF 驱动) ---
-                    DaemonEvent::FrameUpdate { fps: _, frame_delta_ns } => {
+                    DaemonEvent::FrameUpdate { frame_delta_ns } => {
                         if !is_screen_on { continue; } // 息屏不处理渲染帧
 
                         let current_mode = mode_clone.lock().unwrap().clone();
@@ -377,7 +367,6 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
                                 else { cpu_governor.init_policies(&clg_cfg); }
                             } else if cpu_governor.is_active() {
                                 cpu_governor.release();
-                                apply_static_mode(&config_clone, &mode_clone, &sys_path_clone);
                             }
                         }
                     }

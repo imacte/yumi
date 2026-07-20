@@ -29,16 +29,6 @@ use super::policy_controller::PolicyController;
 use super::FasController;
 
 impl FasController {
-    #[allow(dead_code)]
-    pub fn set_ignore_policy(&mut self, policy_id: usize, ignore: bool) {
-        for p in &mut self.policies {
-            if p.policy_id == policy_id {
-                p.ignore_write = ignore;
-                info!("{}", t_with_args("fas-ignore-write", &fluent_args!("pid" => policy_id.to_string(), "ignore" => ignore.to_string())));
-            }
-        }
-    }
-
     /// 热重载规则
     pub fn reload_rules(&mut self, new_rules: &FasRulesConfig) {
         let old_kp = self.cfg.pid.kp;
