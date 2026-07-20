@@ -26,6 +26,15 @@ enum Commands {
     /// 编译 Yumi 项目并打包
     #[command(alias = "b")]
     Build,
+    /// 更新版本号 (Cargo.toml + module.prop + update.json)
+    #[command(alias = "r")]
+    Release {
+        /// 新版本号，如 "v1.0.7"
+        version: String,
+        /// 新 versionCode，不传则自动 +1
+        #[arg(short, long)]
+        code: Option<u32>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -45,6 +54,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Build => build(&sh)?,
+        Commands::Release { version, code } => release(&version, code)?,
     }
 
     Ok(())
@@ -154,5 +164,94 @@ fn build_webui(sh: &Shell) -> Result<()> {
     // push_dir 类似于 cd，离开作用域后会自动切回原目录
     let _dir = sh.push_dir("webui");
     cmd!(sh, "npm run build").run()?;
+    Ok(())
+}
+
+// ─── Release 子命令 ─────────────────────────────────────
+
+fn release(version: &str, code: Option<u32>) -> Result<()> {
+    // 去掉前缀 v（如果用户传了）
+    let ver_stripped = version.strip_prefix('v').unwrap_or(version);
+
+    // 1. 更新 module.prop
+    let prop_path = Path::new("module/module.prop");
+    let prop = fs::read_to_string(prop_path)?;
+    let new_code = match code {
+        Some(c) => c,
+        None => {
+            // 从现有 module.prop 提取并 +1
+            let current: u32 = prop
+                .lines()
+                .find(|l| l.starts_with("versionCode="))
+                .and_then(|l| l.trim_start_matches("versionCode=").parse().ok())
+                .unwrap_or(0);
+            current + 1
+        }
+    };
+
+    let prop = prop
+        .lines()
+        .map(|l| {
+            if l.starts_with("version=") {
+                format!("version=v{}", ver_stripped)
+            } else if l.starts_with("versionCode=") {
+                format!("versionCode={}", new_code)
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(prop_path, prop)?;
+
+    // 2. 更新 Cargo.toml
+    let cargo_path = Path::new("Cargo.toml");
+    let cargo = fs::read_to_string(cargo_path)?;
+    let cargo = cargo
+        .lines()
+        .map(|l| {
+            if l.trim_start().starts_with("version = ") {
+                format!("version = \"{}\"", ver_stripped)
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(cargo_path, cargo)?;
+
+    // 3. 更新 update.json
+    let update_path = Path::new("updateInformation/update.json");
+    if update_path.exists() {
+        let json = fs::read_to_string(update_path)?;
+        let json = json
+            .lines()
+            .map(|l| {
+                if l.trim().starts_with("\"version\"") {
+                    format!("  \"version\": \"v{}\",", ver_stripped)
+                } else if l.trim().starts_with("\"versionCode\"") {
+                    format!("  \"versionCode\": {},", new_code)
+                } else if l.trim().starts_with("\"zipUrl\"") {
+                    // 替换 URL 中的 yumi-vX.Y.Z
+                    let start = l.find("yumi-v").unwrap_or(0);
+                    let end = l[start..].find('/').unwrap_or(l.len() - start);
+                    let rest = if start + end < l.len() { &l[start + end..] } else { "" };
+                    // 注意：这里的文件名需要手动确认（CI 生成的 zip 名包含 git commit 和日期）
+                    format!("  \"zipUrl\": \"https://github.com/imacte/yumi/releases/download/yumi-v{}/yumi-v{}.zip{},", ver_stripped, ver_stripped, rest.trim_end_matches(','))
+                } else if l.trim().starts_with("\"changelog\"") {
+                    format!("  \"changelog\": \"https://raw.githubusercontent.com/imacte/yumi/main/updateInformation/changelog.md\"")
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(update_path, json)?;
+    }
+
+    println!("版本已更新为 v{} (versionCode={})", ver_stripped, new_code);
+    println!("  ✓ Cargo.toml");
+    println!("  ✓ module/module.prop");
+    println!("  ✓ updateInformation/update.json (zipUrl 中的文件名请手动更新)");
     Ok(())
 }
