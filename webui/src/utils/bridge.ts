@@ -54,7 +54,25 @@ const RealBridge = {
     toast(i18n.global.t('switch_success', { mode }) as string);
   },
 
-  async getInstalledApps(): Promise<string[]> { try { return await listPackages('user'); } catch (e) { return []; } },
+  async getInstalledApps(): Promise<string[]> {
+    // 主方法: KernelSU 原生 bridge
+    try {
+      const apps = await listPackages('user');
+      if (apps.length > 0) return apps;
+    } catch (_) { /* 尝试备用方法 */ }
+
+    // 备用方法: pm shell 命令
+    try {
+      const { errno, stdout } = await exec('pm list packages -3');
+      if (errno === 0 && stdout.trim()) {
+        return stdout.trim().split('\n')
+          .map(line => line.replace(/^package:/, '').trim())
+          .filter(Boolean);
+      }
+    } catch (_) { /* 备用方法也失败 */ }
+
+    return [];
+  },
   async getAppRules(): Promise<Record<string, string>> { return (await this.getRulesConfig()).app_modes || {}; },
   
   // ================= 修改这里 =================
