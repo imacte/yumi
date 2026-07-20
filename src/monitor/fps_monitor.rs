@@ -255,6 +255,10 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
                 let pid_changed = rx_pid.has_changed().unwrap_or(false);
                 if pid_changed {
                     let new_pid = *rx_pid.borrow_and_update();
+                    log::debug!("[FPS Probe] watch changed, new_pid={}", new_pid);
+
+                    // also check if probe is None — log that too
+                    log::debug!("[FPS Probe] probe.is_some()={}", probe.is_some());
 
                     debug!(
                         "{}",
