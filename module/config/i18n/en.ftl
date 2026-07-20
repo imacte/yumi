@@ -40,10 +40,15 @@ cpu-monitor-fg-pid-updated = [CPU Monitor] Foreground PID updated { $old } -> { 
 cpu-monitor-tick-log = [CPU Monitor] cores=[{ $cores }] fg_pid={ $pid } fg_max_util={ $util }% threads_tracked={ $threads } delta={ $delta }ms
 cpu-monitor-channel-closed = [CPU Monitor] Channel closed, exiting loop.
 fps-monitor-init = [FPS Monitor] Initializing eBPF FPS monitor...
-fps-monitor-attached = [FPS Monitor] Attached uprobe to symbol: { $sym }
+fps-monitor-attached = [FPS Monitor] Attached uprobe to PID: { $pid }
 fps-monitor-attach-failed = [FPS Monitor] Failed to attach any Uprobe symbols!
-fps-monitor-pid-filter-updated = [FPS Monitor] Updated kernel PID filter: { $old } -> { $new }
-fps-monitor-started = [FPS Monitor] eBPF FPS monitor started successfully (kernel PID filter: { $filter }).
+fps-monitor-attach-failed-initial = [FPS Monitor] Initial attach failed: { $error }
+fps-monitor-init-no-pid = [FPS Monitor] No foreground PID yet, waiting...
+fps-monitor-pid-filter-updated = [FPS Monitor] Target PID updated: { $old } -> { $new }
+fps-monitor-pid-switching = [FPS Monitor] Switching target PID: { $pid }
+fps-monitor-pid-switched = [FPS Monitor] Switched to target PID: { $pid }
+fps-monitor-pid-switch-failed = [FPS Monitor] PID switch failed: { $error }
+fps-monitor-started = [FPS Monitor] eBPF FPS monitor started (per-PID uprobe mode)
 
 # --- Scheduler ---
 scheduler-ipc-started = [Scheduler] IPC Channel listener started.

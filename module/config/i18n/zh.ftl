@@ -39,10 +39,15 @@ cpu-monitor-fg-pid-updated = [CPU Monitor] 前台 PID 已更新 { $old } -> { $n
 cpu-monitor-tick-log = [CPU Monitor] 核心=[{ $cores }] 前台pid={ $pid } 前台最大利用率={ $util }% 跟踪线程数={ $threads } 耗时={ $delta }ms
 cpu-monitor-channel-closed = [CPU Monitor] 通道已关闭，退出循环。
 fps-monitor-init = [FPS Monitor] 正在初始化 eBPF FPS 监控...
-fps-monitor-attached = [FPS Monitor] 已将 uprobe 挂载到符号: { $sym }
+fps-monitor-attached = [FPS Monitor] 已挂载 uprobe 到 PID: { $pid }
 fps-monitor-attach-failed = [FPS Monitor] 未能挂载任何 Uprobe 符号！
-fps-monitor-pid-filter-updated = [FPS Monitor] 已更新内核 PID 过滤器: { $old } -> { $new }
-fps-monitor-started = [FPS Monitor] eBPF FPS 监控启动成功 (内核 PID 过滤: { $filter })。
+fps-monitor-attach-failed-initial = [FPS Monitor] 初始挂载失败: { $error }
+fps-monitor-init-no-pid = [FPS Monitor] 前台 PID 未知，等待前台应用启动...
+fps-monitor-pid-filter-updated = [FPS Monitor] 目标 PID 已更新: { $old } -> { $new }
+fps-monitor-pid-switching = [FPS Monitor] 正在切换目标 PID: { $pid }
+fps-monitor-pid-switched = [FPS Monitor] 已切换到目标 PID: { $pid }
+fps-monitor-pid-switch-failed = [FPS Monitor] PID 切换失败: { $error }
+fps-monitor-started = [FPS Monitor] eBPF FPS 监控启动成功（per-PID uprobe 模式）
 
 # --- Scheduler ---
 scheduler-ipc-started = [Scheduler] IPC 通道监听器已启动

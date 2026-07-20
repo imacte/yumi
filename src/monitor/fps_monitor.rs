@@ -45,18 +45,17 @@ struct FrameTimestampEvent {
     ktime_ns: u64,
 }
 
-/// 帧间隔过滤范围（纳秒），参照 fas-rs 的 MIN_FRAME_NS / MAX_FRAME_NS
+/// 帧间隔过滤范围（纳秒）
 const MIN_FRAME_NS: u64 = 1_000_000;
 const MAX_FRAME_NS: u64 = 200_000_000;
 
-/// 滑动窗口容量（参照 fas-rs AnalyzeTarget::frametimes）
+/// 滑动窗口容量
 const FRAMETIME_WINDOW: usize = 144;
 
 // ─── FpsProbe ────────────────────────────────────────────
 
 /// 帧数探针：每个 PID 持有一个独立的 BPF 实例 + RingBuf + 帧状态
 ///
-/// 设计参照 fas-rs 的 [`AnalyzeTarget`] + [`UprobeHandler`]：
 /// - 独立的 eBPF 实例，按 PID 挂载 uprobe
 /// - 内部维护 `last_ktime_ns` 和滑动窗口 `frametimes`
 /// - Drop 时自动 detach + unload
@@ -74,7 +73,6 @@ struct FpsProbe {
 impl FpsProbe {
     /// 创建一个新的探针，挂载到指定 PID
     ///
-    /// 参照 fas-rs `UprobeHandler::attach_app()`
     fn new(pid: i32) -> Result<Self, anyhow::Error> {
         #[cfg(debug_assertions)]
         let mut bpf = Ebpf::load(include_bytes!(concat!(
@@ -127,7 +125,6 @@ impl FpsProbe {
 
     /// 从 RingBuf 读取所有可用帧事件，更新内部状态
     ///
-    /// 参照 fas-rs `AnalyzeTarget::update()`
     fn poll_frames(&mut self) {
         let ring_map = self._bpf.map_mut("RING_BUF").expect("RING_BUF not found");
         let mut ring = RingBuf::try_from(ring_map).expect("RingBuf::try_from failed");
@@ -137,7 +134,7 @@ impl FpsProbe {
                 continue;
             }
 
-            // 参照 fas-rs 的 trans()：直接 reinterpret bytes → 结构体
+            // 直接 reinterpret bytes → 结构体
             let event = unsafe { ptr::read_unaligned(data.as_ptr().cast::<FrameTimestampEvent>()) };
             let ktime_ns = event.ktime_ns;
 
@@ -145,7 +142,7 @@ impl FpsProbe {
             if let Some(last_ns) = self.last_ktime_ns {
                 let delta_ns = ktime_ns.saturating_sub(last_ns);
                 if (MIN_FRAME_NS..=MAX_FRAME_NS).contains(&delta_ns) {
-                    // 滑动窗口：参照 fas-rs AnalyzeTarget::frametimes
+                    // 滑动窗口
                     if self.frametimes.len() >= FRAMETIME_WINDOW {
                         self.frametimes.pop_back();
                     }
