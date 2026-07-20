@@ -163,7 +163,7 @@ impl FpsProbe {
 /// 重建 mio Poll + register（参照 frame-analyzer 的 register_poll，不用 reregister）
 fn rebuild_poll(poll: &mut Poll, probe: &mut Option<FpsProbe>, token: Token) {
     *poll = Poll::new().expect("mio Poll::new");
-    if let Some(ref mut p) = probe {
+    if let Some(p) = probe {
         let fd = p.ring_fd();
         let mut source = SourceFd(&fd);
         poll.registry()
