@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use log::info;
+use log::{debug, info};
 
 use crate::i18n::t_with_args;
 use crate::fluent_args;
@@ -261,7 +261,7 @@ impl FasController {
             let eff_target = self.effective_target_fps();
             let ema_err = 1000.0 / (eff_target - self.fps_margin).max(1.0) - self.ema_actual_ms;
             let inst_err = 1000.0 / eff_target.max(1.0) - actual_ms;
-            info!("{}", t_with_args("fas-tick-log", &fluent_args!(
+            debug!("{}", t_with_args("fas-tick-log", &fluent_args!(
                 "target" => format!("{:.0}", self.current_target_fps),
                 "avg" => format!("{:.1}", avg_fps),
                 "ms" => format!("{:.2}", actual_ms),

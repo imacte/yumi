@@ -121,7 +121,7 @@ impl FpsProbe {
         })
     }
 
-    /// 获取 RingBuf fd 用于 mio 轮询（参照 frame-analyzer 的 ring()?.as_raw_fd()）
+    /// 获取 RingBuf fd 用于 mio 轮询
     fn ring_fd(&mut self) -> RawFd {
         let ring_map = self._bpf.map_mut("RING_BUF").expect("RING_BUF not found");
         let ring = RingBuf::try_from(ring_map).expect("RingBuf::try_from");
@@ -165,7 +165,7 @@ impl FpsProbe {
     }
 }
 
-/// 重建 mio Poll + register（参照 frame-analyzer 的 register_poll，不用 reregister）
+/// 重建 mio Poll + register（不用 reregister）
 fn rebuild_poll(poll: &mut Poll, probe: &mut Option<FpsProbe>, token: Token) {
     *poll = Poll::new().expect("mio Poll::new");
     if let Some(p) = probe {
@@ -244,7 +244,7 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
             let mut events = Events::with_capacity(64);
             let token = Token(0);
 
-            // 注册当前探针的 RingBuf fd（参照 frame-analyzer 的 register_poll）
+            // 注册当前探针的 RingBuf fd（不用 reregister）
             if let Some(ref mut p) = probe {
                 let fd = p.ring_fd();
                 let mut source = SourceFd(&fd);
@@ -312,7 +312,7 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
                     continue;
                 }
 
-                // 读取帧数据（参照 frame-analyzer 的 AnalyzeTarget::update）
+                // 读取帧数据
                 if let Some(ref mut p) = probe {
                     p.poll_frames();
 
