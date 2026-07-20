@@ -92,16 +92,10 @@ impl FpsProbe {
         let link = program
             .attach(
                 "/system/lib64/libgui.so",
-                "_ZN7android7Surface11queueBufferEP19ANativeWindowBufferi",
+                // offset 0 = 函数入口，不用符号名，避免 aya 读 /etc/ld.so.cache（Android SELinux 限制）
+                0u64,
                 scope,
-            )
-            .or_else(|_| {
-                program.attach(
-                    "/system/lib64/libgui.so",
-                    "_ZN7android7Surface11queueBufferEP19ANativeWindowBufferiPNS_24SurfaceQueueBufferOutputE",
-                    scope,
-                )
-            })?;
+            )?;
 
         info!(
             "{}",
