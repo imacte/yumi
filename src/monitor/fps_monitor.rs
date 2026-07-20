@@ -209,13 +209,11 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
         });
     }
 
-    // RingBuf 读取 + PID 切换（spawn_blocking 线程）
+    // RingBuf 读取 + PID 切换
     let tx_clone = tx.clone();
     std::thread::Builder::new()
         .name("fps_probe".into())
         .spawn(move || {
-            let _rt = tokio::runtime::Handle::current();
-
             // 当前活跃的探针
             let mut probe: Option<FpsProbe> = if initial_pid > 0 {
                 match FpsProbe::new(initial_pid) {
