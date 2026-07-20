@@ -64,29 +64,29 @@ pub async fn start_cpu_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
     let bpf_ptr = bpf as *mut Ebpf;
 
     let core_idle_map: PerCpuArray<_, u64> = PerCpuArray::try_from(
-        unsafe { &mut *bpf_ptr }.map_mut("core_idle_time").unwrap()
+        unsafe { &mut *bpf_ptr }.map_mut("CORE_IDLE_TIME").unwrap()
     )?;
     let core_busy_map: PerCpuArray<_, u64> = PerCpuArray::try_from(
-        unsafe { &mut *bpf_ptr }.map_mut("core_busy_time").unwrap()
+        unsafe { &mut *bpf_ptr }.map_mut("CORE_BUSY_TIME").unwrap()
     )?;
     let core_last_time_map: PerCpuArray<_, u64> = PerCpuArray::try_from(
-        unsafe { &mut *bpf_ptr }.map_mut("core_last_time").unwrap()
+        unsafe { &mut *bpf_ptr }.map_mut("CORE_LAST_TIME").unwrap()
     )?;
     let core_current_tid_map: PerCpuArray<_, u32> = PerCpuArray::try_from(
-        unsafe { &mut *bpf_ptr }.map_mut("core_current_tid").unwrap()
+        unsafe { &mut *bpf_ptr }.map_mut("CORE_CURRENT_TID").unwrap()
     )?;
     let thread_run_map: BpfHashMap<_, u32, u64> = BpfHashMap::try_from(
-        unsafe { &mut *bpf_ptr }.map_mut("thread_run_time").unwrap()
+        unsafe { &mut *bpf_ptr }.map_mut("THREAD_RUN_TIME").unwrap()
     )?;
 
     // TGID 级聚合运行时间 map
     let tgid_run_map: BpfHashMap<_, u32, u64> = BpfHashMap::try_from(
-        unsafe { &mut *bpf_ptr }.map_mut("tgid_run_time").unwrap()
+        unsafe { &mut *bpf_ptr }.map_mut("TGID_RUN_TIME").unwrap()
     )?;
 
     // 每核当前 TGID map (用于 pending delta 补偿)
     let core_current_tgid_map: PerCpuArray<_, u32> = PerCpuArray::try_from(
-        unsafe { &mut *bpf_ptr }.map_mut("core_current_tgid").unwrap()
+        unsafe { &mut *bpf_ptr }.map_mut("CORE_CURRENT_TGID").unwrap()
     )?;
 
     let shared_pid = Arc::new(AtomicU32::new(app_detect::get_current_pid() as u32));
