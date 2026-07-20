@@ -91,9 +91,8 @@ impl FpsProbe {
         let scope = UProbeScope::OneProcess(NonZeroU32::new(pid as u32).expect("pid must be > 0"));
         let link = program
             .attach(
-                "/system/lib64/libgui.so",
-                // offset 0 = 函数入口，不用符号名，避免 aya 读 /etc/ld.so.cache
                 UProbeAttachPoint::from(0u64),
+                "/system/lib64/libgui.so",
                 scope,
             )?;
 
