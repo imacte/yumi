@@ -26,7 +26,7 @@ use std::time::Duration;
 use aya::Ebpf;
 use aya::maps::RingBuf;
 use aya::programs::UProbe;
-use aya::programs::uprobe::{UProbeAttachPoint, UProbeScope};
+use aya::programs::uprobe::{UProbeAttachLocation, UProbeAttachPoint, UProbeScope};
 use log::{debug, info, warn};
 use mio::{Events, Interest, Poll, Token, unix::SourceFd};
 use tokio::sync::watch;
@@ -89,12 +89,24 @@ impl FpsProbe {
         program.load()?;
 
         let scope = UProbeScope::OneProcess(NonZeroU32::new(pid as u32).expect("pid must be > 0"));
+        // 短签名: queueBuffer(ANativeWindowBuffer*, int)
+        let short_sig = "_ZN7android7Surface11queueBufferEP19ANativeWindowBufferi";
+        // 长签名: queueBuffer(ANativeWindowBuffer*, int, SurfaceQueueBufferOutput*)
+        let long_sig = "_ZN7android7Surface11queueBufferEP19ANativeWindowBufferiPNS_24SurfaceQueueBufferOutputE";
+
         let link = program
             .attach(
-                UProbeAttachPoint::from(0u64),
+                UProbeAttachPoint::from(UProbeAttachLocation::from(short_sig)),
                 "/system/lib64/libgui.so",
                 scope,
-            )?;
+            )
+            .or_else(|_| {
+                program.attach(
+                    UProbeAttachPoint::from(UProbeAttachLocation::from(long_sig)),
+                    "/system/lib64/libgui.so",
+                    scope,
+                )
+            })?;
 
         info!(
             "{}",
