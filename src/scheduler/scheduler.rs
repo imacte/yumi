@@ -18,7 +18,7 @@
 use super::config::Config;
 use anyhow::Result;
 use std::fs;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 use crate::i18n::t;
 use crate::utils;
@@ -26,19 +26,16 @@ use crate::utils::SysPathExist;
 
 pub struct CpuScheduler {
     config: Arc<RwLock<Config>>,
-    current_mode_name: Arc<Mutex<String>>,
     sys_path_exist: Arc<SysPathExist>,
 }
 
 impl CpuScheduler {
     pub fn new(
         config: Arc<RwLock<Config>>,
-        initial_mode: Arc<Mutex<String>>,
         sys_path_exist: Arc<SysPathExist>,
     ) -> Self {
         Self {
             config,
-            current_mode_name: initial_mode,
             sys_path_exist,
         }
     }
