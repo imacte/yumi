@@ -40,6 +40,7 @@ struct ClusterState {
     current_perf: f32,
     current_freq: u32,
     down_wait: u32,
+    up_wait: u32,
 }
 
 impl ClusterState {
@@ -177,6 +178,7 @@ impl CpuLoadGovernor {
                 current_perf: init_perf,
                 current_freq: 0,
                 down_wait: 0,
+                up_wait: 0,
             };
 
             let init_freq = cluster.find_nearest_freq(init_perf);
@@ -221,22 +223,37 @@ impl CpuLoadGovernor {
 
         for cluster in &mut self.clusters {
             let util = cluster.max_util(core_utils);
-            let target_perf = (util * self.cfg.headroom_factor)
+
+            // headroom 仅在负载超过升频阈值时才生效，避免低负载放大
+            let headroom = if util >= self.cfg.up_threshold {
+                self.cfg.headroom_factor
+            } else {
+                1.0
+            };
+
+            let target_perf = (util * headroom)
                 .clamp(self.cfg.perf_floor, self.cfg.perf_ceil);
             let old_perf = cluster.current_perf;
 
             if target_perf > old_perf {
                 cluster.down_wait = 0;
+                cluster.up_wait += 1;
+
+                // 升频速率限制：必须连续 up_rate_limit_ticks 才执行
+                if cluster.up_wait < self.cfg.up_rate_limit_ticks {
+                    continue;
+                }
 
                 let is_high_load = util >= self.cfg.up_threshold; 
-                let is_significant_jump = target_perf > old_perf + 0.20; 
+                let is_significant_jump = target_perf > old_perf + 0.35; 
 
                 if is_high_load || is_significant_jump {
                     cluster.current_perf += (target_perf - old_perf) * self.cfg.smoothing_up;
                 } else {
-                    cluster.current_perf += (target_perf - old_perf) * (self.cfg.smoothing_up * 0.05); 
+                    cluster.current_perf += (target_perf - old_perf) * (self.cfg.smoothing_up * 0.02); 
                 }
             } else {
+                cluster.up_wait = 0;
                 cluster.down_wait += 1;
                 if cluster.down_wait >= self.cfg.down_rate_limit_ticks {
                     if util < self.cfg.down_threshold {

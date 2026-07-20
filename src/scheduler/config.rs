@@ -41,6 +41,7 @@ pub struct CpuLoadGovernorConfig {
     #[serde(default = "d_clg_smooth_up")] pub smoothing_up: f32,
     #[serde(default = "d_clg_smooth_down")] pub smoothing_down: f32,
     #[serde(default = "d_clg_down_rate")] pub down_rate_limit_ticks: u32,
+    #[serde(default = "d_clg_up_rate")] pub up_rate_limit_ticks: u32,
     #[serde(default = "d_clg_headroom")] pub headroom_factor: f32,
     #[serde(default = "d_clg_floor")] pub perf_floor: f32,
     #[serde(default = "d_clg_ceil")] pub perf_ceil: f32,
@@ -52,6 +53,7 @@ fn d_clg_down_thresh() -> f32 { 0.50 }
 fn d_clg_smooth_up() -> f32 { 0.60 }
 fn d_clg_smooth_down() -> f32 { 0.30 }
 fn d_clg_down_rate() -> u32 { 3 }
+fn d_clg_up_rate() -> u32 { 2 }
 fn d_clg_headroom() -> f32 { 1.25 }
 fn d_clg_floor() -> f32 { 0.15 }
 fn d_clg_ceil() -> f32 { 1.0 }
@@ -66,6 +68,7 @@ impl Default for CpuLoadGovernorConfig {
             smoothing_up: d_clg_smooth_up(),
             smoothing_down: d_clg_smooth_down(),
             down_rate_limit_ticks: d_clg_down_rate(),
+            up_rate_limit_ticks: d_clg_up_rate(),
             headroom_factor: d_clg_headroom(),
             perf_floor: d_clg_floor(),
             perf_ceil: d_clg_ceil(),
