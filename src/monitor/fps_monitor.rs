@@ -160,6 +160,18 @@ impl FpsProbe {
     }
 }
 
+/// 重建 mio Poll + register（参照 frame-analyzer 的 register_poll，不用 reregister）
+fn rebuild_poll(poll: &mut Poll, probe: &mut Option<FpsProbe>, token: Token) {
+    *poll = Poll::new().expect("mio Poll::new");
+    if let Some(ref mut p) = probe {
+        let fd = p.ring_fd();
+        let mut source = SourceFd(&fd);
+        poll.registry()
+            .register(&mut source, token, Interest::READABLE)
+            .expect("mio register");
+    }
+}
+
 // ─── 主入口 ──────────────────────────────────────────────
 
 pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error> {
@@ -229,15 +241,13 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
             let mut events = Events::with_capacity(64);
             let token = Token(0);
 
-            // 注册当前探针的 RingBuf fd 到 mio
-            let mut fd_registered = false;
+            // 注册当前探针的 RingBuf fd（参照 frame-analyzer 的 register_poll）
             if let Some(ref mut p) = probe {
                 let fd = p.ring_fd();
                 let mut source = SourceFd(&fd);
                 poll.registry()
                     .register(&mut source, token, Interest::READABLE)
                     .expect("mio register");
-                fd_registered = true;
             }
 
             loop {
@@ -256,27 +266,11 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
 
                     match FpsProbe::new(new_pid) {
                         Ok(new_probe) => {
-                            // 先挂载新的，再销毁旧的 —— 最小化帧丢失窗口
                             let old_probe = probe.replace(new_probe);
-
-                            // 将 mio 切换到新探针的 RingBuf fd
-                            if let Some(ref mut p) = probe {
-                                let fd = p.ring_fd();
-                                let mut source = SourceFd(&fd);
-                                if fd_registered {
-                                    let _ = poll.registry().reregister(
-                                        &mut source, token, Interest::READABLE,
-                                    );
-                                } else {
-                                    poll.registry()
-                                        .register(&mut source, token, Interest::READABLE)
-                                        .expect("mio register");
-                                    fd_registered = true;
-                                }
-                            }
-
-                            // 显式 drop 旧探针（detach + unload）
                             drop(old_probe);
+
+                            // 重建 Poll + register（不用 reregister，避免未注册 token 静默失败）
+                            rebuild_poll(&mut poll, &mut probe, token);
 
                             info!(
                                 "{}",
@@ -307,19 +301,11 @@ pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error
 
                 if poll.poll(&mut events, timeout).is_err() {
                     std::thread::sleep(Duration::from_millis(10));
-                    // 如果 poll 出错（比如 kernel fd 失效），重建 poll
-                    poll = Poll::new().expect("mio Poll::new");
-                    if let Some(ref mut p) = probe {
-                        let fd = p.ring_fd();
-                        let mut source = SourceFd(&fd);
-                        poll.registry()
-                            .register(&mut source, token, Interest::READABLE)
-                            .expect("mio register");
-                    }
+                    rebuild_poll(&mut poll, &mut probe, token);
                     continue;
                 }
 
-                // 读取帧数据
+                // 读取帧数据（参照 frame-analyzer 的 AnalyzeTarget::update）
                 if let Some(ref mut p) = probe {
                     p.poll_frames();
 
