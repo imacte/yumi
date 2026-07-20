@@ -26,7 +26,7 @@ use std::time::Duration;
 use aya::Ebpf;
 use aya::maps::RingBuf;
 use aya::programs::UProbe;
-use aya::programs::uprobe::{UProbeAttachLocation, UProbeAttachPoint, UProbeScope};
+use aya::programs::uprobe::{UProbeAttachPoint, UProbeScope};
 use log::{debug, info, warn};
 use mio::{Events, Interest, Poll, Token, unix::SourceFd};
 use tokio::sync::watch;
@@ -93,7 +93,7 @@ impl FpsProbe {
             .attach(
                 "/system/lib64/libgui.so",
                 // offset 0 = 函数入口，不用符号名，避免 aya 读 /etc/ld.so.cache
-                UProbeAttachPoint::new(UProbeAttachLocation::from(0u64)),
+                UProbeAttachPoint::from(0u64),
                 scope,
             )?;
 
