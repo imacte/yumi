@@ -31,6 +31,7 @@ powersave:
     smoothing_up: 0.40
     smoothing_down: 0.50
     down_rate_limit_ticks: 2
+    up_rate_limit_ticks: 2
     headroom_factor: 1.10
     perf_floor: 0.10
     perf_ceil: 0.70
@@ -44,6 +45,7 @@ balance:
     smoothing_up: 0.60
     smoothing_down: 0.30
     down_rate_limit_ticks: 3
+    up_rate_limit_ticks: 2
     headroom_factor: 1.25
     perf_floor: 0.15
     perf_ceil: 1.0
@@ -57,6 +59,7 @@ performance:
     smoothing_up: 0.80
     smoothing_down: 0.20
     down_rate_limit_ticks: 5
+    up_rate_limit_ticks: 1
     headroom_factor: 1.40
     perf_floor: 0.35
     perf_ceil: 1.0
@@ -70,6 +73,7 @@ fast:
     smoothing_up: 1.0
     smoothing_down: 0.01
     down_rate_limit_ticks: 10
+    up_rate_limit_ticks: 1
     headroom_factor: 2.0
     perf_floor: 1.0
     perf_ceil: 1.0
