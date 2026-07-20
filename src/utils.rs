@@ -218,7 +218,6 @@ impl FastWriter {
             let _ = file.seek(SeekFrom::Start(0));
             match file.write_all(&self.buf[..len]) {
                 Ok(()) => {
-                    self.last_value = Some(value);
                     true
                 }
                 Err(e) => {

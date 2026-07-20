@@ -159,7 +159,6 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
     // ==========================================
     let config_clone = shared_config.clone();
     let mode_clone = shared_mode_name.clone();
-    let sys_path_clone = sys_path_exist.clone();
 
     thread::Builder::new()
         .name("scheduler_ipc".to_string())

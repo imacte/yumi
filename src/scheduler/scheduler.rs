@@ -20,8 +20,7 @@ use anyhow::Result;
 use std::fs;
 use std::sync::{Arc, Mutex, RwLock};
 
-use crate::i18n::{t, t_with_args};
-use crate::fluent_args; 
+use crate::i18n::t;
 use crate::utils;
 use crate::utils::SysPathExist;
 
