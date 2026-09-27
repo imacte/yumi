@@ -54,3 +54,8 @@ strip = true
 opt-level = "z"
 lto = true
 codegen-units = 1
+
+# bpf-linker/LLVM does not accept -Oz. Keep size optimization for the daemon,
+# but compile and link the kernel probes with the supported -O2 level.
+[profile.release.package.yumi-ebpf]
+opt-level = 2
