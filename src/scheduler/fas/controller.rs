@@ -45,6 +45,7 @@ pub struct FasController {
     pub(super) ema_actual_ms: f32,
 
     pub policies: Vec<PolicyController>,
+    pub(super) saved_perfmgr: Vec<(String, String)>,
 
     pub(super) fps_window: FpsWindow,
     pub(super) log_counter: u32,
@@ -129,6 +130,7 @@ impl FasController {
             current_target_fps: 60.0,
             ema_actual_ms: 0.0,
             policies: Vec::new(),
+            saved_perfmgr: Vec::new(),
             fps_window: FpsWindow::new(),
             log_counter: 0,
             consecutive_normal_frames: 0,

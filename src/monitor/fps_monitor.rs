@@ -15,143 +15,200 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use std::collections::{HashMap, VecDeque};
-use std::mem::size_of;
-use std::num::NonZeroU32;
-use std::os::unix::io::{AsRawFd, RawFd};
-use std::ptr;
-use std::sync::mpsc::Sender;
-use std::time::Duration;
+use crate::{
+    common::DaemonEvent,
+    monitor::{
+        app_detect,
+        sampling::{FrameClock, FrameSample},
+    },
+    utils::get_ktime_ns,
+};
+use anyhow::{Context, Result};
+use aya::{
+    Ebpf, EbpfError,
+    maps::{
+        MapData, MapError, PerfEventArray, RingBuf,
+        perf::{PerfEvent, PerfEventArrayBuffer},
+    },
+    programs::{
+        UProbe,
+        uprobe::{UProbeAttachLocation, UProbeAttachPoint, UProbeLinkId, UProbeScope},
+    },
+};
+use log::{info, warn};
+use mio::{Events, Interest, Poll, Registry, Token, unix::SourceFd};
+use std::{
+    collections::BTreeMap,
+    num::NonZeroU32,
+    os::fd::AsRawFd,
+    sync::mpsc::Sender,
+    time::{Duration, Instant},
+};
 
-use aya::Ebpf;
-use aya::maps::RingBuf;
-use aya::programs::UProbe;
-use aya::programs::uprobe::{UProbeAttachLocation, UProbeAttachPoint, UProbeScope};
-use log::{debug, info, warn};
-use mio::{Events, Interest, Poll, Token, unix::SourceFd};
-use tokio::sync::watch;
-
-use crate::common::DaemonEvent;
-use crate::fluent_args;
-use crate::i18n::{t, t_with_args};
-use crate::monitor::app_detect;
-
-// ─── 常量 ────────────────────────────────────────────────
-
-/// uprobe 符号名（短签名）
+const LIBGUI_PATH: &str = "/system/lib64/libgui.so";
 const SYMBOL_SHORT: &str = "_ZN7android7Surface11queueBufferEP19ANativeWindowBufferi";
-/// uprobe 符号名（长签名，fallback）
 const SYMBOL_LONG: &str =
     "_ZN7android7Surface11queueBufferEP19ANativeWindowBufferiPNS_24SurfaceQueueBufferOutputE";
-const LIBGUI_PATH: &str = "/system/lib64/libgui.so";
 
-/// RingBuf 输出的帧时间戳事件（与 yumi-ebpf 的 FrameTimestampEvent 内存布局一致）
-#[repr(C)]
-struct FrameTimestampEvent {
-    pid: u32,
-    ktime_ns: u64,
+enum Transport {
+    Ring(RingBuf<MapData>),
+    Perf {
+        array: PerfEventArray<MapData>,
+        buffers: BTreeMap<u32, PerfEventArrayBuffer<MapData>>,
+    },
 }
 
-const MIN_FRAME_NS: u64 = 1_000_000;
-const MAX_FRAME_NS: u64 = 200_000_000;
-const FRAMETIME_WINDOW: usize = 144;
-
-// ─── ProbeState：单个 PID 的帧统计 ─────────────────────
-
-struct ProbeState {
-    last_ktime_ns: Option<u64>,
-    frametimes: VecDeque<Duration>,
-}
-
-impl ProbeState {
-    fn new() -> Self {
-        Self { last_ktime_ns: None, frametimes: VecDeque::with_capacity(FRAMETIME_WINDOW) }
+impl Transport {
+    fn register(&mut self, registry: &Registry) -> Result<()> {
+        if let Self::Ring(ring) = self {
+            registry.register(
+                &mut SourceFd(&ring.as_raw_fd()),
+                Token(0),
+                Interest::READABLE,
+            )?;
+        }
+        self.refresh_cpus(registry)
     }
 
-    fn ingest(&mut self, ktime_ns: u64) {
-        if let Some(last_ns) = self.last_ktime_ns {
-            let delta_ns = ktime_ns.saturating_sub(last_ns);
-            if (MIN_FRAME_NS..=MAX_FRAME_NS).contains(&delta_ns) {
-                if self.frametimes.len() >= FRAMETIME_WINDOW {
-                    self.frametimes.pop_back();
+    fn refresh_cpus(&mut self, registry: &Registry) -> Result<()> {
+        if let Self::Perf { array, buffers } = self {
+            let online = aya::util::online_cpus().map_err(|(_, error)| error)?;
+            let offline: Vec<_> = buffers
+                .keys()
+                .filter(|cpu| !online.contains(cpu))
+                .copied()
+                .collect();
+            for cpu in offline {
+                if let Some(buffer) = buffers.remove(&cpu) {
+                    registry.deregister(&mut SourceFd(&buffer.as_raw_fd()))?;
                 }
-                self.frametimes.push_front(Duration::from_nanos(delta_ns));
+            }
+            for cpu in online {
+                if let std::collections::btree_map::Entry::Vacant(entry) = buffers.entry(cpu) {
+                    let buffer = array
+                        .open(cpu, Some(8))
+                        .with_context(|| format!("open FPS perf buffer on CPU {cpu}"))?;
+                    registry.register(
+                        &mut SourceFd(&buffer.as_raw_fd()),
+                        Token(cpu as usize + 1),
+                        Interest::READABLE,
+                    )?;
+                    entry.insert(buffer);
+                }
             }
         }
-        self.last_ktime_ns = Some(ktime_ns);
+        Ok(())
     }
 
-    fn latest_frametime(&self) -> Option<Duration> {
-        self.frametimes.front().copied()
+    fn drain(&mut self) -> (Vec<FrameSample>, u64) {
+        let mut frames = Vec::new();
+        let mut lost = 0;
+        match self {
+            Self::Ring(ring) => {
+                while let Some(data) = ring.next() {
+                    if let Some(frame) = FrameSample::decode(&data, &[]) {
+                        frames.push(frame);
+                    }
+                }
+            }
+            Self::Perf { buffers, .. } => {
+                for buffer in buffers.values_mut() {
+                    buffer.for_each(|event| match event {
+                        PerfEvent::Sample { head, tail } => {
+                            if let Some(frame) = FrameSample::decode(head, tail) {
+                                frames.push(frame);
+                            }
+                        }
+                        PerfEvent::Lost { count } => lost += count,
+                    });
+                }
+            }
+        }
+        // Perf buffers are per CPU; merge by kernel timestamp before computing
+        // intervals for a render thread that migrated between cores.
+        frames.sort_unstable_by_key(|frame| frame.ktime_ns);
+        (frames, lost)
     }
 }
-
-// ─── FpsManager：单 eBPF 实例，多 PID attach ─────────────
 
 struct FpsManager {
     bpf: Ebpf,
-    ring_fd: RawFd,
-    /// 当前活跃 PID → UProbeLinkId
-    links: HashMap<u32, aya::programs::uprobe::UProbeLinkId>,
-    /// 当前活跃 PID → 帧统计
-    states: HashMap<u32, ProbeState>,
-    /// 当前关注的目标 PID（最近一次 attach 的 PID）
+    transport: Transport,
+    link: Option<UProbeLinkId>,
     current_pid: u32,
+    clock: FrameClock,
+}
+
+fn ring_unsupported(error: &EbpfError) -> bool {
+    matches!(error, EbpfError::MapError(MapError::CreateError { name, io_error })
+        if name == "RING_BUF" && matches!(io_error.raw_os_error(),
+            Some(libc::EINVAL) | Some(libc::EOPNOTSUPP) | Some(libc::ENOSYS)))
 }
 
 impl FpsManager {
-    /// 加载 eBPF 程序（只执行一次），获取 RingBuf fd
-    fn new() -> Result<Self, anyhow::Error> {
-        #[cfg(debug_assertions)]
-        let mut bpf = Ebpf::load(include_bytes!(concat!(
+    fn new() -> Result<Self> {
+        let (mut bpf, use_ring) = match Ebpf::load(aya::include_bytes_aligned!(concat!(
             env!("OUT_DIR"),
-            "/ebpf_target/bpfel-unknown-none/debug/yumi-ebpf"
-        )))?;
-        #[cfg(not(debug_assertions))]
-        let mut bpf = Ebpf::load(include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/ebpf_target/bpfel-unknown-none/release/yumi-ebpf"
-        )))?;
-
-        let program: &mut UProbe = bpf.program_mut("handle_frame").unwrap().try_into()?;
-        program.load()?;
-
-        let ring_fd = {
-            let ring_map = bpf.map_mut("RING_BUF").expect("RING_BUF not found");
-            let ring = RingBuf::try_from(ring_map).expect("RingBuf::try_from");
-            ring.as_raw_fd()
+            "/fps-ring.ebpf"
+        ))) {
+            Ok(bpf) => (bpf, true),
+            Err(error) if ring_unsupported(&error) => {
+                warn!("[FPS Monitor] RingBuf unavailable: {error:?}; trying PerfEventArray");
+                let bpf = Ebpf::load(aya::include_bytes_aligned!(concat!(
+                    env!("OUT_DIR"),
+                    "/fps-perf.ebpf"
+                )))
+                .with_context(|| {
+                    format!("load FPS perf fallback after RingBuf failure: {error:?}")
+                })?;
+                (bpf, false)
+            }
+            Err(error) => return Err(error).context("load FPS RingBuf object"),
         };
-
+        let program: &mut UProbe = bpf
+            .program_mut("handle_frame")
+            .context("missing handle_frame")?
+            .try_into()?;
+        program.load().context("load FPS uprobe")?;
+        let transport = if use_ring {
+            Transport::Ring(
+                bpf.take_map("RING_BUF")
+                    .context("missing RING_BUF")?
+                    .try_into()?,
+            )
+        } else {
+            Transport::Perf {
+                array: bpf
+                    .take_map("FRAME_EVENTS")
+                    .context("missing FRAME_EVENTS")?
+                    .try_into()?,
+                buffers: BTreeMap::new(),
+            }
+        };
         Ok(Self {
             bpf,
-            ring_fd,
-            links: HashMap::new(),
-            states: HashMap::new(),
+            transport,
+            link: None,
             current_pid: 0,
+            clock: FrameClock::default(),
         })
     }
 
-    /// 切换到新 PID：detach 旧 PID + attach 新 PID
-    fn switch_pid(&mut self, new_pid: u32) -> Result<(), anyhow::Error> {
-        if new_pid == self.current_pid {
+    fn switch_pid(&mut self, new_pid: u32) -> Result<()> {
+        self.current_pid = 0;
+        self.clock.reset(get_ktime_ns());
+        let program: &mut UProbe = self
+            .bpf
+            .program_mut("handle_frame")
+            .context("missing handle_frame")?
+            .try_into()?;
+        if let Some(link) = self.link.take() {
+            program.detach(link).context("detach old FPS probe")?;
+        }
+        let Some(pid) = NonZeroU32::new(new_pid) else {
             return Ok(());
-        }
-
-        // detach 旧 PID
-        if self.current_pid > 0 {
-            if let Some(link_id) = self.links.remove(&self.current_pid) {
-                let program: &mut UProbe =
-                    self.bpf.program_mut("handle_frame").unwrap().try_into()?;
-                let _ = program.detach(link_id);
-            }
-        }
-
-        // attach 新 PID
-        let pid_i32 = new_pid as i32;
-        let scope =
-            UProbeScope::OneProcess(NonZeroU32::new(new_pid).expect("pid must be > 0"));
-
-        let program: &mut UProbe = self.bpf.program_mut("handle_frame").unwrap().try_into()?;
+        };
+        let scope = UProbeScope::OneProcess(pid);
         let link = program
             .attach(
                 UProbeAttachPoint::from(UProbeAttachLocation::from(SYMBOL_SHORT)),
@@ -164,173 +221,101 @@ impl FpsManager {
                     LIBGUI_PATH,
                     scope,
                 )
-            })?;
-
-        self.links.insert(new_pid, link);
-        self.states.entry(new_pid).or_insert_with(ProbeState::new);
+            })
+            .with_context(|| format!("attach FPS probe to PID {new_pid}"))?;
+        self.link = Some(link);
         self.current_pid = new_pid;
-
-        info!(
-            "{}",
-            t_with_args("fps-monitor-attached", &fluent_args!("pid" => pid_i32.to_string()))
-        );
+        info!("[FPS Monitor] Attached to PID {new_pid}");
         Ok(())
-    }
-
-    /// 从共享 RingBuf 读取帧事件，按 PID 分派
-    fn poll_frames(&mut self) {
-        let ring_map = self.bpf.map_mut("RING_BUF").expect("RING_BUF not found");
-        let mut ring = RingBuf::try_from(ring_map).expect("RingBuf::try_from failed");
-
-        while let Some(data) = ring.next() {
-            if data.len() < size_of::<FrameTimestampEvent>() {
-                continue;
-            }
-            let event =
-                unsafe { ptr::read_unaligned(data.as_ptr().cast::<FrameTimestampEvent>()) };
-
-            if let Some(state) = self.states.get_mut(&event.pid) {
-                state.ingest(event.ktime_ns);
-            }
-        }
-    }
-
-    /// 当前 PID 的最新帧间隔
-    fn latest_frametime(&self) -> Option<Duration> {
-        self.states.get(&self.current_pid)?.latest_frametime()
-    }
-
-    fn has_active_probe(&self) -> bool {
-        self.current_pid > 0
     }
 }
 
-// ─── 主入口 ──────────────────────────────────────────────
-
-pub async fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<(), anyhow::Error> {
-    info!("{}", t("fps-monitor-init"));
-
-    let initial_pid = app_detect::get_current_pid();
-    let (tx_pid, mut rx_pid) = watch::channel(initial_pid);
-
-    // PID 检测任务
-    {
-        tokio::spawn(async move {
-            let mut last_pid: i32 = initial_pid;
-            loop {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                let current_pid = app_detect::get_current_pid();
-                if current_pid != last_pid && current_pid > 0 {
-                    debug!(
-                        "{}",
-                        t_with_args(
-                            "fps-monitor-pid-filter-updated",
-                            &fluent_args!(
-                                "old" => last_pid.to_string(),
-                                "new" => current_pid.to_string()
-                            )
-                        )
-                    );
-                    last_pid = current_pid;
-                    let _ = tx_pid.send(current_pid);
+// This function owns the entire worker. Returning an error reaches the monitor
+// supervisor; there are no detached PID watchers or permanently pending tasks.
+pub fn start_fps_loop(tx: Sender<DaemonEvent>) -> Result<()> {
+    let mut manager = FpsManager::new()?;
+    let mut poll = Poll::new()?;
+    manager
+        .transport
+        .register(poll.registry())
+        .context("register FPS event buffers")?;
+    let backend = match &manager.transport {
+        Transport::Ring(_) => "RingBuf",
+        _ => "PerfEventArray",
+    };
+    info!("[FPS Monitor] {backend} initialized; waiting for target PID");
+    let mut events = Events::with_capacity(64);
+    let mut target_pid = 0;
+    let mut next_attach = Instant::now();
+    let mut next_cpu_refresh = Instant::now() + Duration::from_secs(1);
+    loop {
+        let now = Instant::now();
+        let pid = app_detect::get_current_pid().max(0) as u32;
+        if pid != target_pid {
+            target_pid = pid;
+            next_attach = now;
+        }
+        if manager.current_pid != target_pid && now >= next_attach {
+            if tx.send(DaemonEvent::FpsProbeUnavailable).is_err() {
+                return Ok(());
+            }
+            if let Err(error) = manager.switch_pid(target_pid) {
+                warn!("[FPS Monitor] {error:#}; retrying in 2 seconds");
+            }
+            next_attach = now + Duration::from_secs(2);
+        }
+        if now >= next_cpu_refresh {
+            manager.transport.refresh_cpus(poll.registry())?;
+            next_cpu_refresh = now + Duration::from_secs(1);
+        }
+        if let Err(error) = poll.poll(&mut events, Some(Duration::from_millis(100))) {
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error).context("poll FPS event buffers");
+        }
+        let (frames, lost) = manager.transport.drain();
+        let ktime = get_ktime_ns();
+        if lost > 0 {
+            warn!("[FPS Monitor] Lost {lost} perf events; resetting frame baseline");
+            manager.clock.reset(ktime);
+        }
+        for frame in frames {
+            if manager.current_pid == 0 || frame.pid != manager.current_pid {
+                continue;
+            }
+            if let Some(frame_delta_ns) = manager.clock.ingest(frame.ktime_ns, ktime) {
+                let sampled_at = Instant::now() - Duration::from_nanos(ktime - frame.ktime_ns);
+                if tx
+                    .send(DaemonEvent::FrameUpdate {
+                        frame_delta_ns,
+                        pid: frame.pid,
+                        sampled_at,
+                    })
+                    .is_err()
+                {
+                    return Ok(());
                 }
             }
-        });
+        }
     }
+}
 
-    let tx_clone = tx.clone();
-    std::thread::Builder::new()
-        .name("fps_probe".into())
-        .spawn(move || {
-            let mut manager = match FpsManager::new() {
-                Ok(m) => m,
-                Err(e) => {
-                    warn!(
-                        "{}",
-                        t_with_args(
-                            "fps-monitor-attach-failed-initial",
-                            &fluent_args!("error" => e.to_string())
-                        )
-                    );
-                    return;
-                }
-            };
-
-            // 初始 attach
-            if initial_pid > 0 {
-                if let Err(e) = manager.switch_pid(initial_pid as u32) {
-                    warn!(
-                        "{}",
-                        t_with_args(
-                            "fps-monitor-attach-failed-initial",
-                            &fluent_args!("error" => e.to_string())
-                        )
-                    );
-                }
-            } else {
-                info!("{}", t("fps-monitor-init-no-pid"));
-            }
-
-            // mio 轮询（只创建一次）
-            let mut poll = Poll::new().expect("mio Poll::new");
-            let mut events = Events::with_capacity(64);
-            let token = Token(0);
-
-            // 注册 RingBuf fd（只注册一次，不会变）
-            if manager.has_active_probe() {
-                let fd = manager.ring_fd;
-                let mut source = SourceFd(&fd);
-                poll.registry()
-                    .register(&mut source, token, Interest::READABLE)
-                    .expect("mio register");
-            }
-
-            loop {
-                // ── PID 变化 ──
-                if rx_pid.has_changed().unwrap_or(false) {
-                    let new_pid = *rx_pid.borrow_and_update() as u32;
-
-                    // 无需重新注册 Poll——RingBuf fd 不变
-                    if let Err(e) = manager.switch_pid(new_pid) {
-                        warn!(
-                            "{}",
-                            t_with_args(
-                                "fps-monitor-pid-switch-failed",
-                                &fluent_args!("error" => e.to_string())
-                            )
-                        );
-                    }
-                }
-
-                // ── 轮询 ──
-                let timeout = if manager.has_active_probe() {
-                    Some(Duration::from_millis(100))
-                } else {
-                    Some(Duration::from_millis(500))
-                };
-
-                // mio poll error 只意味着被信号打断，sleep 后重试即可
-                if poll.poll(&mut events, timeout).is_err() {
-                    std::thread::sleep(Duration::from_millis(10));
-                    continue;
-                }
-
-                manager.poll_frames();
-
-                if let Some(delta) = manager.latest_frametime() {
-                    if tx_clone
-                        .send(DaemonEvent::FrameUpdate {
-                            frame_delta_ns: delta.as_nanos() as u64,
-                        })
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-            }
-        })?;
-
-    info!("{}", t("fps-monitor-started"));
-    std::future::pending::<()>().await;
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn fallback_only_for_unsupported_ring_creation() {
+        let error = |name: &str, errno| {
+            EbpfError::MapError(MapError::CreateError {
+                name: name.to_string(),
+                io_error: std::io::Error::from_raw_os_error(errno),
+            })
+        };
+        assert!(ring_unsupported(&error("RING_BUF", libc::EINVAL)));
+        assert!(ring_unsupported(&error("RING_BUF", libc::EOPNOTSUPP)));
+        assert!(!ring_unsupported(&error("RING_BUF", libc::EPERM)));
+        assert!(!ring_unsupported(&error("RING_BUF", libc::ENOMEM)));
+        assert!(!ring_unsupported(&error("OTHER", libc::EINVAL)));
+    }
 }

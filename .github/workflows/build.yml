@@ -44,6 +44,9 @@ jobs:
           targets: aarch64-linux-android
           components: rust-src # build-std 需要用到 (含 bpfel-unknown-none)
 
+      - name: Test monitors and compiled probe isolation
+        run: cargo test -p yumi --bin yumi --locked
+
       # 5. 安装 Android NDK
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1

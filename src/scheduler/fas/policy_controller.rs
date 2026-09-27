@@ -25,6 +25,9 @@ use crate::i18n::t_with_args;
 use crate::fluent_args;
 
 pub struct PolicyController {
+    original_governor: String,
+    original_min: u32,
+    original_max: u32,
     pub max_writer: FastWriter,
     pub min_writer: FastWriter,
     pub available_freqs: Vec<u32>,
@@ -50,6 +53,7 @@ impl PolicyController {
         policy_id: usize,
         cluster_profile: ClusterProfile,
         current_freq: u32,
+        original: (String, u32, u32),
     ) -> Self {
         let freq_min = *available_freqs.first().unwrap_or(&0) as f32;
         let freq_max = *available_freqs.last().unwrap_or(&1) as f32;
@@ -58,6 +62,9 @@ impl PolicyController {
             .map(|&f| (f as f32 - freq_min) / range)
             .collect();
         Self {
+            original_governor: original.0,
+            original_min: original.1,
+            original_max: original.2,
             max_writer, min_writer, available_freqs, cached_ratios,
             current_freq, policy_id, cluster_profile,
             freq_hold_frames: 0, freq_min, freq_max,
@@ -153,11 +160,20 @@ impl PolicyController {
     }
 
     pub fn reset(&mut self) {
-        let min_f = self.available_freqs[0];
         let max_f = *self.available_freqs.last().unwrap();
-        self.max_writer.write_value_force(max_f);
-        self.min_writer.write_value_force(min_f);
-        self.current_freq = max_f;
+        // Restore the snapshot taken before FAS changed governor or limits.
+        // Widen max first so that restoring min cannot violate min <= max.
+        let mut restored = self.max_writer.write_value_force(max_f);
+        restored &= self.min_writer.write_value_force(self.original_min);
+        restored &= self.max_writer.write_value_force(self.original_max);
+        restored &= crate::utils::write_to_file(
+            &format!("/sys/devices/system/cpu/cpufreq/policy{}/scaling_governor", self.policy_id),
+            self.original_governor.as_bytes(),
+        ).is_ok();
+        if !restored {
+            warn!("[FAS] Failed to fully restore policy {}", self.policy_id);
+        }
+        self.current_freq = self.original_max;
         self.verify_freq = None;
     }
 }

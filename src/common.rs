@@ -32,15 +32,20 @@ pub enum DaemonEvent {
     /// 高频事件：eBPF 捕获到的底层渲染帧数据
     FrameUpdate {
         frame_delta_ns: u64, // 纳秒级帧间隔
+        pid: u32,
+        sampled_at: std::time::Instant,
     },
     /// eBPF 全局系统负载更新 (每 X 毫秒触发一次)
     SystemLoadUpdate {
+        sampled_at: std::time::Instant,
         /// 每个 CPU 核心的真实利用率 (0.0 ~ 1.0)，数组索引即 cpu_id
         core_utils: Vec<f32>,
         /// 如果当前有前台应用，这是该应用最吃 CPU 的那 1 个线程的利用率
         foreground_max_util: f32, 
     },
 
+    CpuMonitorUnavailable,
+    FpsProbeUnavailable,
     ConfigReload(RulesConfig),
 
     ScreenStateChange(bool),

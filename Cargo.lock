@@ -2095,6 +2095,7 @@ version = "2.0.2"
 dependencies = [
  "anyhow",
  "aya",
+ "aya-obj",
  "bytes",
  "fluent",
  "fluent-bundle",

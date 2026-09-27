@@ -39,7 +39,7 @@
   * **Android 版本**: Android 8.0 (API 26) 及以上。
   * **架构支持**: ARM64 (AArch64)。
   * **权限要求**: Root 权限。
-  * **内核要求**: 支持 eBPF（需要 `CONFIG_BPF`、`CONFIG_BPF_SYSCALL` 等内核选项）。
+  * **内核要求**: 支持 eBPF、sched tracepoint 和 uprobe（需要 `CONFIG_BPF`、`CONFIG_BPF_SYSCALL` 等内核选项）。FPS 优先使用 RingBuf，不支持时自动尝试独立的 PerfEventArray 后端；CPU 探针不依赖 RingBuf。最终可用性取决于设备内核功能与权限。
 
 ## 🏗️ 系统架构
 
@@ -456,15 +456,16 @@ yumi 使用两个 eBPF 探针进行内核级数据采集：
 
   * **每核心 idle/busy 时间**: 通过 `PERCPU_ARRAY` 累计，用户态读取后计算真实利用率。
   * **每核心当前 TID**: 用于用户态实时补偿尚未触发 sched_switch 的任务时间。
-  * **线程运行时间**: 通过 `HASH` map 记录每个线程的累计 CPU 时间，用于计算前台应用最重线程利用率。
+  * **线程运行时间**: 通过 `LRU_HASH` map 记录每个线程的累计 CPU 时间，用于计算前台应用最重线程利用率；条目被驱逐后重新建立采样基线。
 
 #### FPS 探针 (`yumi-ebpf`)
 
 挂载到 `libgui.so` 的 `Surface::queueBuffer` 函数（uprobe），在每帧渲染提交时触发：
 
-  * **内核侧时间戳采集**: 在 eBPF 中通过 `bpf_ktime_get_ns()` 记录帧提交时间，通过 RingBuf 零拷贝传输到用户态。
+  * **内核侧时间戳采集**: 在 eBPF 中通过 `bpf_ktime_get_ns()` 记录帧提交时间，通过 RingBuf 或兼容后端 PerfEventArray 传输到用户态。CPU、RingBuf FPS、PerfEvent FPS 分别编译，避免 map 加载失败相互影响。
   * **per-PID uprobe 挂载**: 每个目标进程持有独立的 eBPF 实例，PID 切换时自动 detach 旧实例并 attach 新实例，确保只捕获目标进程的帧事件。
-  * **用户态帧间隔计算**: 用户态在 RingBuf 中读取连续帧时间戳，计算 delta，过滤异常帧间隔（1ms~200ms）。
+  * **用户态帧间隔计算**: 按内核时间戳合并帧事件，每个新帧间隔仅发送一次，过滤异常帧间隔（1ms~200ms）；没有新帧时不重发缓存值。
+  * **监控失效保护**: CLG 收到有效 CPU 样本后才接管频率；FAS 等待有效 CPU 和目标进程帧数据。监控退出或数据超过 2 秒未更新时释放相应控制，并尝试恢复接管前的 governor 和频率范围。切换控制器时立即释放旧控制，避免保留旧锁频状态。
 
 -----
 

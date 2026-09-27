@@ -215,6 +215,7 @@ impl FasController {
         rules.normalize();
         let fas_rules = &rules;
 
+        self.reset_all_freqs();
         self.policies.clear();
         self.cfg = fas_rules.clone();
         self.cfg.migrate_legacy_margins();
@@ -226,8 +227,15 @@ impl FasController {
         }
         self.fps_margin = fas_rules.fps_margin;
 
-        let _ = crate::utils::write_to_file("/sys/module/perfmgr/parameters/perfmgr_enable", "0");
-        let _ = crate::utils::write_to_file("/sys/module/mtk_fpsgo/parameters/perfmgr_enable", "0");
+        for path in ["/sys/module/perfmgr/parameters/perfmgr_enable",
+            "/sys/module/mtk_fpsgo/parameters/perfmgr_enable"] {
+            if !self.saved_perfmgr.iter().any(|(saved, _)| saved == path) {
+                if let Ok(value) = fs::read_to_string(path) {
+                    self.saved_perfmgr.push((path.to_string(), value));
+                    let _ = crate::utils::write_to_file(path, "0");
+                }
+            }
+        }
 
         // [修改项] 动态拉取 CPU policy 列表
         let clusters = crate::scheduler::get_cpu_policies();
@@ -248,10 +256,6 @@ impl FasController {
 
         for (idx, policy) in clusters.iter().enumerate() {
             let pid = policy.id;
-            let _ = crate::utils::try_write_file(
-                &format!("/sys/devices/system/cpu/cpufreq/policy{}/scaling_governor", pid),
-                "performance");
-
             let mut freqs: Vec<u32> = fs::read_to_string(
                 format!("/sys/devices/system/cpu/cpufreq/policy{}/scaling_available_frequencies", pid))
                 .unwrap_or_default()
@@ -284,6 +288,19 @@ impl FasController {
                 continue;
             }
 
+            let base = format!("/sys/devices/system/cpu/cpufreq/policy{pid}");
+            let original = (|| -> Option<(String, u32, u32)> {
+                let governor = fs::read_to_string(format!("{base}/scaling_governor")).ok()?.trim().to_string();
+                if governor.is_empty() { return None; }
+                let min = fs::read_to_string(format!("{base}/scaling_min_freq")).ok()?.trim().parse().ok()?;
+                let max = fs::read_to_string(format!("{base}/scaling_max_freq")).ok()?.trim().parse().ok()?;
+                Some((governor, min, max))
+            })();
+            let Some(original) = original else {
+                warn!("[FAS] Cannot snapshot policy {pid}; leaving it under system control");
+                continue;
+            };
+            let _ = crate::utils::try_write_file(&format!("{base}/scaling_governor"), "performance");
             mw.write_value_force(max_f);
             nw.write_value_force(max_f);
 
@@ -299,7 +316,7 @@ impl FasController {
                 "weight" => format!("{:.2}", profile.capacity_weight)
             )));
 
-            self.policies.push(PolicyController::new(mw, nw, freqs, pid as usize, profile, max_f));
+            self.policies.push(PolicyController::new(mw, nw, freqs, pid as usize, profile, max_f, original));
         }
 
         self.current_target_fps = *self.fps_gears.iter().reduce(|a, b| if a > b { a } else { b }).unwrap_or(&60.0);
@@ -309,6 +326,10 @@ impl FasController {
         self.perf_index = self.cfg.perf_cold_boot;
         self.temp_threshold = fas_rules.core_temp_threshold;
         self.apply_freqs();
+
+        if self.policies.is_empty() {
+            self.reset_all_freqs();
+        }
 
         info!("{}", t_with_args("fas-init-summary", &fluent_args!(
             "fps" => format!("{:.0}", self.current_target_fps),
@@ -324,5 +345,11 @@ impl FasController {
         for policy in &mut self.policies {
             policy.reset();
         }
+        self.saved_perfmgr.retain(|(path, value)| {
+            if crate::utils::write_to_file(path, value.trim()).is_err() {
+                warn!("[FAS] Failed to restore {path}");
+                true
+            } else { false }
+        });
     }
 }

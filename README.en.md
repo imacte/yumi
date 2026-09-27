@@ -456,15 +456,16 @@ Attached to `tracepoint/sched/sched_switch`, triggered on every context switch, 
 
   * **Per-core idle/busy time**: Accumulated via `PERCPU_ARRAY`; userspace reads and computes real utilization.
   * **Per-core current TID**: Used by userspace to compensate in real time for tasks that haven't yet triggered a sched_switch.
-  * **Thread runtime**: Recorded per-thread cumulative CPU time via `HASH` map, used to compute the foreground app's heaviest thread utilization.
+  * **Thread runtime**: Records cumulative CPU time in an `LRU_HASH` map to compute the foreground app's heaviest thread utilization, re-establishing a baseline after counter eviction/reset.
 
 #### FPS Probe (`yumi-ebpf`)
 
 Attached to `libgui.so`'s `Surface::queueBuffer` function (uprobe), triggered on every frame submission:
 
-  * **Kernel-side timestamp capture**: Records frame submission time via `bpf_ktime_get_ns()` in eBPF, transmitted to userspace via RingBuf with zero-copy.
+  * **Kernel-side timestamp capture**: Records frame submission time via `bpf_ktime_get_ns()` and sends it through RingBuf, with a separate PerfEventArray fallback when RingBuf creation is unsupported. CPU, RingBuf FPS and PerfEvent FPS probes are compiled separately so their map failures are isolated. Device kernel features and permissions still determine availability.
   * **Per-PID uprobe attachment**: Each target process holds an independent eBPF instance. On PID switch, the old instance is automatically detached and a new one attached to the new PID, ensuring only the target process's frame events are captured.
-  * **Userspace frame interval calculation**: Userspace reads consecutive frame timestamps from RingBuf, computes deltas, and filters abnormal frame intervals (1ms–200ms).
+  * **Userspace frame interval calculation**: Merges events by kernel timestamp, emits each new interval once, and filters abnormal intervals (1ms–200ms). It never replays a cached interval while rendering is stopped.
+  * **Monitor failure handling**: CLG takes control only after valid CPU samples arrive; FAS also requires frames from the target process. Monitor exit or a two-second sample timeout releases the affected controller and attempts to restore the previous governor and frequency limits. Controller handovers release old frequency locks immediately.
 
 -----
 

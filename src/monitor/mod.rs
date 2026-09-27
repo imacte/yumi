@@ -27,6 +27,7 @@ pub mod app_detect;
 pub mod screen_detect;
 pub mod fps_monitor;
 pub mod cpu_monitor;
+mod sampling;
 
 use crate::common::DaemonEvent;
 use crate::fluent_args;
@@ -35,6 +36,9 @@ use crate::i18n::{t, t_with_args};
 // 启动函数
 pub fn start_monitor(tx: Sender<DaemonEvent>) -> Result<(), Box<dyn Error>> {
     info!("{}", t("monitor-starting"));
+    info!("[Main] kernel={}, page_size={}",
+        std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default().trim(),
+        unsafe { libc::sysconf(libc::_SC_PAGESIZE) });
 
     // ===== 解除内核 eBPF Map 内存锁定限制 =====
     unsafe {
@@ -43,7 +47,8 @@ pub fn start_monitor(tx: Sender<DaemonEvent>) -> Result<(), Box<dyn Error>> {
             rlim_max: libc::RLIM_INFINITY,
         };
         if libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) != 0 {
-            log::warn!("{}", t("monitor-rlimit-memlock-failed"));
+            let error = std::io::Error::last_os_error();
+            log::warn!("{}: {error}", t("monitor-rlimit-memlock-failed"));
         }
     }
     
@@ -92,20 +97,15 @@ pub fn start_monitor(tx: Sender<DaemonEvent>) -> Result<(), Box<dyn Error>> {
             }
         })?;
 
-    // 5. 启动 eBPF FPS 监控线程 (带有独立的 Tokio 运行时)
+    // 5. FPS worker owns its poll loop and reports initialization/runtime errors.
     let tx_fps = tx.clone();
     thread::Builder::new()
         .name("fps_monitor_ebpf".to_string())
         .spawn(move || {
-            if let Ok(rt) = tokio::runtime::Runtime::new() {
-                rt.block_on(async {
-                    if let Err(e) = fps_monitor::start_fps_loop(tx_fps).await {
-                        error!("{}", t_with_args("monitor-fps-crashed", &fluent_args!("error" => e.to_string())));
-                    }
-                });
-            } else {
-                error!("{}", t("monitor-fps-tokio-failed"));
+            if let Err(e) = fps_monitor::start_fps_loop(tx_fps.clone()) {
+                error!("{}", t_with_args("monitor-fps-crashed", &fluent_args!("error" => format!("{e:#}"))));
             }
+            let _ = tx_fps.send(DaemonEvent::FpsProbeUnavailable);
         })?;
 
     // 6. 启动 eBPF CPU 负载监控线程
@@ -115,13 +115,14 @@ pub fn start_monitor(tx: Sender<DaemonEvent>) -> Result<(), Box<dyn Error>> {
         .spawn(move || {
             if let Ok(rt) = tokio::runtime::Runtime::new() {
                 rt.block_on(async {
-                    if let Err(e) = cpu_monitor::start_cpu_loop(tx_cpu).await {
-                        error!("{}", t_with_args("monitor-cpu-crashed", &fluent_args!("error" => e.to_string())));
+                    if let Err(e) = cpu_monitor::start_cpu_loop(tx_cpu.clone()).await {
+                        error!("{}", t_with_args("monitor-cpu-crashed", &fluent_args!("error" => format!("{e:#}"))));
                     }
                 });
             } else {
                 error!("{}", t("monitor-cpu-tokio-failed"));
             }
+            let _ = tx_cpu.send(DaemonEvent::CpuMonitorUnavailable);
         })?;
 
     // 7. 启动应用检测主循环 (阻塞)
@@ -133,4 +134,29 @@ pub fn start_monitor(tx: Sender<DaemonEvent>) -> Result<(), Box<dyn Error>> {
     )?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn compiled_probes_have_independent_maps_and_programs() {
+        let cpu = aya_obj::Object::parse(aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/cpu.ebpf"))).unwrap();
+        assert!(cpu.programs.contains_key("handle_sched_switch"));
+        assert!(!cpu.programs.contains_key("handle_frame"));
+        assert!(cpu.maps.contains_key("CORE_IDLE_TIME"));
+        assert!(!cpu.maps.contains_key("RING_BUF"));
+        assert!(!cpu.maps.contains_key("FRAME_EVENTS"));
+
+        for (bytes, map, other) in [
+            (aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/fps-ring.ebpf")), "RING_BUF", "FRAME_EVENTS"),
+            (aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/fps-perf.ebpf")), "FRAME_EVENTS", "RING_BUF"),
+        ] {
+            let fps = aya_obj::Object::parse(bytes).unwrap();
+            assert!(fps.programs.contains_key("handle_frame"));
+            assert!(!fps.programs.contains_key("handle_sched_switch"));
+            assert!(fps.maps.contains_key(map));
+            assert!(!fps.maps.contains_key(other));
+            assert!(!fps.maps.contains_key("CORE_IDLE_TIME"));
+        }
+    }
 }

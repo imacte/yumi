@@ -25,6 +25,7 @@ pub mod config;
 pub mod scheduler;
 pub mod fas;
 pub mod cpu_load_governor;
+mod monitor_health;
 
 use crate::i18n::{t, load_language, t_with_args};
 use crate::fluent_args; 
@@ -175,228 +176,153 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
             let rules_path = crate::monitor::config::get_rules_path();
             let mut current_rules = crate::utils::read_config::<crate::monitor::config::RulesConfig, _>(&rules_path).unwrap_or_default();
 
-            // 状态机变量
-            let mut fas_suspended_at: Option<Instant> = None;
-            let mut fas_suspended_package = String::new();
-            const FAS_SUSPEND_GRACE_SECS: u64 = 5;
-            
-            let mut is_screen_on = true; // 屏幕状态标记
-
+            let mut is_screen_on = true;
+            let mut cpu_health = monitor_health::MonitorHealth::default();
+            let mut fps_health = monitor_health::MonitorHealth::default();
+            let mut game: Option<(i32, String, f64)> = None;
+            let mut clg_dirty = true;
             let temp_sensor_path = crate::utils::find_cpu_temp_path().unwrap_or_default();
             let mut last_temp_update = Instant::now();
 
             let get_clg_cfg = |config: &Config, mode: &str| -> crate::scheduler::config::CpuLoadGovernorConfig {
                 config.get_mode(mode).map(|m| m.cpu_load_governor.clone()).unwrap_or_else(|| {
-                    // 未知/空模式名：不意外启用 CLG，避免用默认参数接管 CPU
                     let mut cfg = crate::scheduler::config::CpuLoadGovernorConfig::default();
                     cfg.enabled = false;
                     cfg
                 })
             };
 
-            // 启动时初始化
-            {
-                let current_mode = mode_clone.lock().unwrap().clone();
-                if current_mode != "fas" {
-                    let config_lock = config_clone.read().unwrap();
-                    let clg_cfg = get_clg_cfg(&config_lock, &current_mode);
-                    if clg_cfg.enabled {
-                        cpu_governor.init_policies(&clg_cfg);
-                        log::info!("{}", t_with_args("scheduler-clg-init", &fluent_args!("mode" => current_mode.clone())));
-                    }
-                }
-            }
-            
-            // 事件循环包在 catch_unwind 中：任何 panic 都被捕获并记录，
-            // 避免调度线程静默死亡（进程存活但频率停在最后状态）
+            // Readiness starts false. Check the watchdog on timeout AND on each
+            // message, so either an idle channel or a busy one can release control.
             let loop_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            for msg in rx {
-                match msg {
-                    // --- 1. 屏幕状态事件 (息屏深度睡眠) ---
-                    DaemonEvent::ScreenStateChange(screen_on) => {
-                        is_screen_on = screen_on;
-                        let current_mode = mode_clone.lock().unwrap().clone();
+                loop {
+                    let message = match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                        Ok(message) => Some(message),
+                        Err(mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
+                    let now = Instant::now();
+                    if !cpu_health.ready(now) && cpu_governor.is_active() {
+                        log::warn!("[Scheduler] CPU samples unavailable; restoring CPU policies");
+                        cpu_governor.release();
+                    }
+                    if (!cpu_health.ready(now) || !fps_health.ready(now)) && !fas_controller.policies.is_empty() {
+                        log::warn!("[Scheduler] Monitor samples unavailable; releasing FAS policies");
+                        fas_controller.reset_all_freqs();
+                        fas_controller.policies.clear();
+                        fas_controller.clear_game();
+                    }
 
-                        if !is_screen_on {
-                            log::info!("{}", t("scheduler-doze-enable"));
-                            
-                            // 息屏立刻剥夺 FAS 的频率控制权
-                            if current_mode == "fas" {
+                    if let Some(message) = message {
+                        match message {
+                            DaemonEvent::ScreenStateChange(screen_on) => {
+                                is_screen_on = screen_on;
+                                clg_dirty = true;
+                                fps_health.invalidate();
+                                // Release the previous owner before taking the
+                                // next snapshot, including FAS -> Doze transitions.
                                 fas_controller.reset_all_freqs();
-                                fas_controller.clear_game();
                                 fas_controller.policies.clear();
-                                fas_suspended_at = None;
-                                fas_suspended_package.clear();
+                                fas_controller.clear_game();
+                                log::info!("{}", t(if screen_on { "scheduler-doze-restore" } else { "scheduler-doze-enable" }));
                             }
-
-                            // 强行让 CLG 接管，并动态生成一个极致省电配置
-                            let config_lock = config_clone.read().unwrap();
-                            let mut doze_cfg = get_clg_cfg(&config_lock, "powersave"); 
-                            doze_cfg.enabled = true;
-                            doze_cfg.perf_floor = 0.0;
-                            doze_cfg.perf_ceil = doze_cfg.perf_ceil.min(0.40); // 锁死天花板最高只给 40% 性能
-                            doze_cfg.smoothing_up = 0.10;           // 升频极其迟钝
-                            doze_cfg.smoothing_down = 1.0;          // 瞬间降频
-                            
-                            cpu_governor.init_policies(&doze_cfg);
-                        } else {
-                            log::info!("{}", t("scheduler-doze-restore"));
-                            
-                            let config_lock = config_clone.read().unwrap();
-                            let clg_cfg = get_clg_cfg(&config_lock, &current_mode);
-                            
-                            if current_mode != "fas" {
-                                if clg_cfg.enabled {
-                                    // 息屏 doze 期间 CLG 仍持有 writer，热切换配置即可
-                                    if cpu_governor.is_active() { cpu_governor.reload_config(&clg_cfg); } 
-                                    else { cpu_governor.init_policies(&clg_cfg); }
-                                } 
-                                else { cpu_governor.release(); }
-                            } else {
-                                cpu_governor.release(); 
-                                *mode_clone.lock().unwrap() = String::new();
-                            }
-                        }
-                    },
-
-                    // --- 2. 前台模式切换事件 ---
-                    DaemonEvent::ModeChange { package_name, pid, mode, temperature } => {
-                        let mut current_mode_lock = mode_clone.lock().unwrap();
-                        let old_mode = current_mode_lock.clone();
-                        
-                        if old_mode != mode {
-                            log::info!("{}", t_with_args("scheduler-mode-change-request", &fluent_args!(
-                                "old" => old_mode.clone(), "new" => mode.as_str(), "pkg" => package_name.as_str(), "temp" => temperature
-                            )));
-                            
-                            *current_mode_lock = mode.clone();
-                            drop(current_mode_lock); 
-
-                            let _ = utils::try_write_file(&mode_file_path, mode.as_bytes());
-
-                            if mode == "fas" {
-                                // 进游戏：释放 CLG 控制权，激活 FAS
-                                cpu_governor.release();
-
-                                let can_resume = fas_suspended_at.map_or(false, |at| {
-                                    at.elapsed().as_secs() < FAS_SUSPEND_GRACE_SECS && fas_suspended_package == package_name && !fas_controller.policies.is_empty()
-                                });
-
-                                if can_resume {
-                                    fas_suspended_at = None;
-                                    fas_suspended_package.clear();
-                                    for policy in &mut fas_controller.policies { policy.force_reapply(); }
-                                } else {
-                                    fas_suspended_at = None;
-                                    fas_suspended_package.clear();
-                                    fas_controller.load_policies(&current_rules.fas_rules);
-                                }
-                                fas_controller.set_game(pid, &package_name);
-                                fas_controller.set_temperature(temperature);
-                                fas_controller.set_temp_threshold(current_rules.fas_rules.core_temp_threshold);
-                            } else {
-                                // 退游戏：尝试挂起 FAS，并激活普通模式
-                                if fas_suspended_at.is_some() {
+                            DaemonEvent::ModeChange { package_name, pid, mode, temperature } => {
+                                let old_mode = mode_clone.lock().unwrap().clone();
+                                let game_changed = mode == "fas" && game.as_ref()
+                                    .is_none_or(|(old_pid, old_package, _)| *old_pid != pid || *old_package != package_name);
+                                if old_mode != mode || game_changed {
+                                    log::info!("{}", t_with_args("scheduler-mode-change-request", &fluent_args!(
+                                        "old" => old_mode, "new" => mode.as_str(), "pkg" => package_name.as_str(), "temp" => temperature
+                                    )));
+                                    // Never retain old FAS locks while CLG takes a
+                                    // snapshot: release both owners at a handover.
                                     fas_controller.reset_all_freqs();
-                                    fas_controller.clear_game();
                                     fas_controller.policies.clear();
-                                    fas_suspended_at = None;
-                                    fas_suspended_package.clear();
-                                }
-
-                                if old_mode == "fas" && !fas_controller.policies.is_empty() {
-                                    fas_suspended_at = Some(Instant::now());
-                                    fas_suspended_package = package_name.clone();
-                                } else if old_mode == "fas" {
                                     fas_controller.clear_game();
-                                    fas_controller.policies.clear();
-                                    fas_suspended_at = None;
-                                    fas_suspended_package.clear();
+                                    if mode == "fas" && is_screen_on { cpu_governor.release(); }
+                                    fps_health.invalidate();
+                                    clg_dirty = true;
                                 }
-
-                                // 仅在亮屏时处理 CLG。如果息屏，Doze 配置仍在生效，这里不能覆盖它
-                                if is_screen_on {
-                                    let config_lock = config_clone.read().unwrap();
-                                    let clg_cfg = get_clg_cfg(&config_lock, &mode);
-                                    if clg_cfg.enabled {
-                                        // CLG 已激活时热切换配置，避免同模式反复切换全量重建
-                                        if cpu_governor.is_active() { cpu_governor.reload_config(&clg_cfg); }
-                                        else { cpu_governor.init_policies(&clg_cfg); }
-                                    } else {
-                                        cpu_governor.release();
+                                *mode_clone.lock().unwrap() = mode.clone();
+                                let _ = utils::try_write_file(&mode_file_path, mode.as_bytes());
+                                game = if mode == "fas" { Some((pid, package_name, temperature)) } else { None };
+                                fas_controller.set_temperature(temperature);
+                            }
+                            DaemonEvent::SystemLoadUpdate { core_utils, foreground_max_util, sampled_at } => {
+                                let valid = !core_utils.is_empty()
+                                    && core_utils.iter().all(|u| u.is_finite() && (0.0..=1.0).contains(u))
+                                    && foreground_max_util.is_finite() && (0.0..=1.0).contains(&foreground_max_util);
+                                if valid && cpu_health.observe(sampled_at, now) {
+                                    fas_controller.update_cpu_util(foreground_max_util);
+                                    fas_controller.update_core_utils(&core_utils);
+                                    if cpu_governor.is_active() { cpu_governor.on_load_update(&core_utils); }
+                                }
+                            }
+                            DaemonEvent::FrameUpdate { frame_delta_ns, pid, sampled_at } => {
+                                if is_screen_on && cpu_health.ready(now)
+                                    && (1_000_000..=200_000_000).contains(&frame_delta_ns)
+                                {
+                                    if let Some((game_pid, package, temperature)) = &game {
+                                        if *game_pid > 0 && pid == *game_pid as u32 && fps_health.observe(sampled_at, now) {
+                                            if fas_controller.policies.is_empty() {
+                                                cpu_governor.release();
+                                                fas_controller.load_policies(&current_rules.fas_rules);
+                                                fas_controller.set_game(*game_pid, package);
+                                                fas_controller.set_temperature(*temperature);
+                                                fas_controller.set_temp_threshold(current_rules.fas_rules.core_temp_threshold);
+                                            }
+                                            if !temp_sensor_path.is_empty() && last_temp_update.elapsed().as_secs() >= 3 {
+                                                if let Ok(raw_temp) = crate::utils::read_f64_from_file(&temp_sensor_path) {
+                                                    fas_controller.set_temperature(raw_temp / 1000.0);
+                                                }
+                                                last_temp_update = now;
+                                            }
+                                            fas_controller.update_frame(frame_delta_ns);
+                                        }
                                     }
                                 }
                             }
-                        } else if mode == "fas" {
-                            fas_controller.set_temperature(temperature);
-                        }
-                    },
-
-                    // --- 3. CPU 负载事件 (eBPF 驱动) ---
-                    DaemonEvent::SystemLoadUpdate { core_utils, foreground_max_util } => {
-                        let current_mode = mode_clone.lock().unwrap().clone();
-                        // 仅当亮屏且在 FAS 模式且未挂起时，投喂 FAS
-                        if is_screen_on && current_mode == "fas" && fas_suspended_at.is_none() {
-                            fas_controller.update_cpu_util(foreground_max_util);
-                            fas_controller.update_core_utils(&core_utils);
-                        }
-                        // 如果 CLG 处于活动状态（包含日常模式或息屏 Doze 模式），全权投喂
-                        if cpu_governor.is_active() {
-                            cpu_governor.on_load_update(&core_utils);
-                        }
-                    },
-
-                    // --- 4. 帧率事件 (eBPF 驱动) ---
-                    DaemonEvent::FrameUpdate { frame_delta_ns } => {
-                        if !is_screen_on { continue; } // 息屏不处理渲染帧
-
-                        let current_mode = mode_clone.lock().unwrap().clone();
-                        if current_mode == "fas" {
-                            if !temp_sensor_path.is_empty() && last_temp_update.elapsed().as_secs() >= 3 {
-                                if let Ok(raw_temp) = crate::utils::read_f64_from_file(&temp_sensor_path) { 
-                                    fas_controller.set_temperature(raw_temp / 1000.0); 
+                            DaemonEvent::CpuMonitorUnavailable => cpu_health.invalidate(),
+                            DaemonEvent::FpsProbeUnavailable => fps_health.invalidate(),
+                            DaemonEvent::ConfigReload(new_rules) => {
+                                current_rules = new_rules;
+                                clg_dirty = true;
+                                if !fas_controller.policies.is_empty() {
+                                    fas_controller.reload_rules(&current_rules.fas_rules);
                                 }
-                                last_temp_update = Instant::now();
                             }
-                            fas_controller.update_frame(frame_delta_ns);
                         }
                     }
 
-                    // --- 5. 热重载配置事件 ---
-                    DaemonEvent::ConfigReload(new_rules) => {
-                        current_rules = new_rules;
-                        let current_mode = mode_clone.lock().unwrap().clone();
-                        
-                        if current_mode == "fas" {
-                            if fas_controller.policies.is_empty() {
-                                fas_controller.load_policies(&current_rules.fas_rules);
-                            } else {
-                                fas_controller.reload_rules(&current_rules.fas_rules);
-                            }
-                        } else if is_screen_on { // 息屏时不要用新配置覆盖 Doze
+                    // Every CLG entry point (startup/mode/wake/Doze/reload/recovery)
+                    // passes through this single readiness gate.
+                    let current_mode = mode_clone.lock().unwrap().clone();
+                    if cpu_health.ready(now) && (!is_screen_on || current_mode != "fas") {
+                        if clg_dirty || !cpu_governor.is_active() {
                             let config_lock = config_clone.read().unwrap();
-                            let clg_cfg = get_clg_cfg(&config_lock, &current_mode);
-                            if clg_cfg.enabled {
-                                if cpu_governor.is_active() { cpu_governor.reload_config(&clg_cfg); } 
-                                else { cpu_governor.init_policies(&clg_cfg); }
-                            } else if cpu_governor.is_active() {
-                                cpu_governor.release();
+                            let mut cfg = get_clg_cfg(&config_lock, if is_screen_on { &current_mode } else { "powersave" });
+                            if !is_screen_on {
+                                cfg.enabled = true;
+                                cfg.perf_floor = 0.0;
+                                cfg.perf_ceil = cfg.perf_ceil.min(0.40);
+                                cfg.smoothing_up = 0.10;
+                                cfg.smoothing_down = 1.0;
                             }
+                            if cfg.enabled {
+                                if cpu_governor.is_active() { cpu_governor.reload_config(&cfg); }
+                                else { cpu_governor.init_policies(&cfg); }
+                            } else { cpu_governor.release(); }
                         }
+                    } else if cpu_governor.is_active() {
+                        cpu_governor.release();
                     }
-                }
-
-                // 定期检查 FAS 挂起状态是否超时
-                if let Some(suspended_at) = fas_suspended_at {
-                    if suspended_at.elapsed().as_secs() >= FAS_SUSPEND_GRACE_SECS {
+                    if (!cpu_health.ready(now) || !fps_health.ready(now)) && !fas_controller.policies.is_empty() {
                         fas_controller.reset_all_freqs();
-                        fas_controller.clear_game();
                         fas_controller.policies.clear();
-                        fas_suspended_at = None;
-                        fas_suspended_package.clear();
+                        fas_controller.clear_game();
                     }
+                    clg_dirty = false;
                 }
-            }
             }));
             if loop_result.is_err() {
                 log::error!("{}", t("scheduler-ipc-panic"));

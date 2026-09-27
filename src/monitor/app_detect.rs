@@ -274,7 +274,7 @@ pub fn app_detection_loop(
 
         // 无阻塞防抖逻辑
         if detected_pkg != last_package && !detected_pkg.is_empty() {
-            if detected_pkg != pending_package {
+            if detected_pkg != pending_package || detected_pid != pending_pid {
                 pending_package = detected_pkg.clone();
                 pending_pid = detected_pid;
                 debounce_start = Instant::now();
@@ -285,13 +285,17 @@ pub fn app_detection_loop(
             }
         } else {
             pending_package.clear();
+            if detected_pkg == last_package && detected_pid > 0 {
+                final_pid = detected_pid;
+            }
         }
 
         let current_temp = if !temp_sensor_path.is_empty() {
             utils::read_f64_from_file(&temp_sensor_path).unwrap_or(0.0) / 1000.0
         } else { 0.0 };
         
-        if last_package != final_pkg || force_refresh {
+        let pid_changed = final_pid != get_current_pid();
+        if last_package != final_pkg || pid_changed || force_refresh {
             if !final_pkg.is_empty() {
                 set_current_package(&final_pkg, final_pid);
                 // 使用已获取的 config_snapshot，不再重复加锁
@@ -299,9 +303,8 @@ pub fn app_detection_loop(
 
                 // force_refresh（配置重载/亮屏恢复）只驱动外层重新计算模式；
                 // 模式未变时不重发 ModeChange，避免 "balance -> balance" 冗余事件。
-                // 注意：同模式应用切换不发事件对 scheduler 无影响——CLG 按模式调频，
-                // FAS 是独立模式（进入必然伴随模式变化），温度刷新走 FrameUpdate。
-                if last_mode != new_mode {
+                // CLG 按模式调频；FAS 同模式切换游戏也必须更新 PID 和应用配置。
+                if last_mode != new_mode || (new_mode == "fas" && (last_package != final_pkg || pid_changed)) {
                     info!("{}", t_with_args("app-detect-mode-change-pkg", &fluent_args!("old" => last_mode.clone(), "new" => new_mode.as_str(), "pkg" => final_pkg.as_str())));
                     // ModeChange 事件现在携带 pid 字段
                     let _ = tx.send(DaemonEvent::ModeChange {

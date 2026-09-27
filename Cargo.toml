@@ -46,6 +46,9 @@ fluent = "0.17.0"
 fluent-bundle = "0.16.0"
 intl-memoizer = "0.5.3"
 
+[dev-dependencies]
+aya-obj = "0.3.0"
+
 [profile.release]
 strip = true
 opt-level = "z"

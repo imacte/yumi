@@ -240,7 +240,7 @@ impl CpuLoadGovernor {
                 "fmin" => (fmin / 1000.0).to_string(),
                 "fmax" => (fmax / 1000.0).to_string(),
                 "perf" => format!("{:.2}", init_perf),
-                "freq" => (init_freq / 1000).to_string()
+                "freq" => init_freq.to_string()
             )));
 
             self.clusters.push(cluster);
@@ -420,8 +420,8 @@ impl CpuLoadGovernor {
                     "pid" => c.policy_id.to_string(),
                     "util" => format!("{:.0}", c.max_util(core_utils) * 100.0),
                     "perf" => format!("{:.2}", c.current_perf),
-                    "freq" => (c.current_freq / 1000).to_string(),
-                    "boost" => format!("{:.0}", c.boost_max as f32 / 1000.0)
+                    "freq" => c.current_freq.to_string(),
+                    "boost" => c.boost_max.to_string()
                 )));
             }
         }
