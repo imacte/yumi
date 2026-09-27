@@ -63,7 +63,7 @@ jobs:
           echo "$install_dir" >> "$GITHUB_PATH"
 
       - name: Test monitors and compiled probe isolation
-        run: cargo test -p yumi --bin yumi --locked
+        run: cargo test -p yumi --bin yumi --locked --future-incompat-report
 
       # 5. 安装 Android NDK
       - name: Setup Android NDK

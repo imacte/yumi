@@ -29,19 +29,16 @@ mio = { version = "1.0", features = ["os-ext"] }
 # Tokio 必须开启 full 或至少是 rt-multi-thread 和 macros 才能运行异步 FPS 循环
 tokio = { version = "1", features = ["full"] }
 bytes = "1.11"
-futures = "0.3"
 itoa = "1.0"
 
 # --- Monitor 带来的依赖 ---    
 inotify = "0.11.1"
-regex = "1.12"
 kobject-uevent = "0.2"
 netlink-sys = "0.8"
 
 # --- Scheduler 带来的依赖 ---
 log4rs = "1.4"
-nix = { version = "0.31.2", features = ["fs", "signal", "inotify"] }
-glob = "0.3.3"
+nix = { version = "0.31.2", features = ["fs"] }
 fluent = "0.17.0"
 fluent-bundle = "0.16.0"
 intl-memoizer = "0.5.3"

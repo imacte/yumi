@@ -145,7 +145,7 @@ fn build_core(sh: &Shell) -> Result<()> {
     println!("正在编译 Rust Core...");
     // push_env 会在当前作用域内设置环境变量，离开作用域自动恢复
     let _env = sh.push_env("RUSTFLAGS", "-C default-linker-libraries");
-    cmd!(sh, "cargo +nightly ndk --platform 26 -t arm64-v8a build -Z build-std -r").run()?;
+    cmd!(sh, "cargo +nightly ndk --platform 26 -t arm64-v8a build -Z build-std -r --locked --future-incompat-report").run()?;
     Ok(())
 }
 
