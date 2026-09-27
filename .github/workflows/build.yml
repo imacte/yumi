@@ -44,6 +44,24 @@ jobs:
           targets: aarch64-linux-android
           components: rust-src # build-std 需要用到 (含 bpfel-unknown-none)
 
+      - name: Install prebuilt bpf-linker
+        shell: bash
+        env:
+          BPF_LINKER_VERSION: "0.11.1"
+          BPF_LINKER_SHA256: e058a6aecc9e65fa4c977b298a8e4b738424d7629769fd352eed409fb57e16e8
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/bpf-linker-x86_64-unknown-linux-musl.tar.zst"
+          install_dir="$RUNNER_TEMP/bpf-linker-bin"
+          curl --fail --location --retry 3 \
+            "https://github.com/aya-rs/bpf-linker/releases/download/v${BPF_LINKER_VERSION}/bpf-linker-x86_64-unknown-linux-musl.tar.zst" \
+            --output "$archive"
+          echo "$BPF_LINKER_SHA256  $archive" | sha256sum --check --strict
+          mkdir -p "$install_dir"
+          tar --zstd -xf "$archive" -C "$install_dir"
+          "$install_dir/bpf-linker" --version
+          echo "$install_dir" >> "$GITHUB_PATH"
+
       - name: Test monitors and compiled probe isolation
         run: cargo test -p yumi --bin yumi --locked
 

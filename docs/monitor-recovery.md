@@ -15,6 +15,8 @@
 
 在 Linux、Rust nightly、rust-src 和 bpf-linker 可用的环境执行：
 
+工作流在测试前下载官方预编译的 `bpf-linker 0.11.1`（Linux x86_64 musl），校验固定的 SHA-256 后加入 `GITHUB_PATH`，供测试和 Android 打包共用。`build.rs` 不再隐式执行 `cargo install`；本地构建也需要先按 [上游安装说明](https://github.com/aya-rs/bpf-linker#installation) 安装预编译版本并加入 PATH。
+
 ```sh
 cargo test -p yumi --bin yumi --locked
 ```
