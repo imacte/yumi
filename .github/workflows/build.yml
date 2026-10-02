@@ -1,23 +1,37 @@
 name: Build Yumi
 
-# 触发条件：当推送到 main 分支，或者发布 tag 时触发。
-# workflow_dispatch 允许在 GitHub 网页端手动点击运行。
+# 触发条件与发布策略：
+#   - push 到 main 分支 / 手动运行(main)：构建通过后自动发布「预发布版」(Pre-release)；
+#   - push 版本标签（v2.0.2 或 yumi-v2.0.2）：构建通过后发布「正式版」(Release)，
+#     且标签版本必须与 Cargo.toml 中的 version 完全一致，否则拒绝发布；
+#   - pull_request：只构建并上传临时产物，不发布任何 Release。
 on:
   push:
     branches: [ "main" ]
     tags:
       - 'v*'
+      - 'yumi-v*'
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+# 默认最小权限(只读)；只有发布任务单独申请 contents: write (创建 Release/标签需要写权限)
+permissions:
+  contents: read
 
 jobs:
   build:
     name: Build and Package
     # 使用最新的 Ubuntu 运行环境
     runs-on: ubuntu-latest
+    outputs:
+      # Cargo.toml 中的版本号：用于拼装预发布标签、校验正式版标签
+      version: ${{ steps.version.outputs.version }}
+      # 产物名（即 zip 文件名去掉 .zip）：用于发布任务下载产物
+      artifact-name: ${{ steps.artifact-name.outputs.name }}
 
     steps:
       # 1. 拉取代码
@@ -26,18 +40,38 @@ jobs:
         with:
           fetch-depth: 0 
 
-      # 2. 配置 Node.js 环境 (用于编译 WebUI)
+      # 2. 解析 Cargo.toml 中的版本号
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(awk '
+            { sub(/\r$/, "") }
+            /^\[/ { section = $0 }
+            section == "[package]" && /^[[:space:]]*version[[:space:]]*=/ {
+              sub(/^[^"]*"/, ""); sub(/".*$/, ""); print; exit
+            }
+          ' Cargo.toml)
+          if [ -z "$version" ]; then
+            echo "::error title=无法解析版本号::未能从 Cargo.toml 的 [package] 段读取 version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Yumi 版本: $version"
+
+      # 3. 配置 Node.js 环境 (用于编译 WebUI)
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
           node-version: '24' # 推荐使用 LTS 版本
           
-      # 3. 安装 WebUI 依赖
+      # 4. 安装 WebUI 依赖
       - name: Install WebUI dependencies
         working-directory: ./webui
         run: npm install
 
-      # 4. 配置 Rust Nightly 环境并添加 Android 交叉编译目标
+      # 5. 配置 Rust Nightly 环境并添加 Android 交叉编译目标
       - name: Setup Rust Toolchain
         uses: dtolnay/rust-toolchain@nightly
         with:
@@ -65,24 +99,24 @@ jobs:
       - name: Test monitors and compiled probe isolation
         run: cargo test -p yumi --bin yumi --locked --future-incompat-report
 
-      # 5. 安装 Android NDK
+      # 6. 安装 Android NDK
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
           ndk-version: r29
 
-      # 6. 配置 NDK 环境变量并安装 cargo-ndk
+      # 7. 配置 NDK 环境变量并安装 cargo-ndk
       - name: Setup cargo-ndk
         run: |
           echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
           cargo install cargo-ndk
 
-      # 7. 运行 xtask 构建脚本
+      # 8. 运行 xtask 构建脚本
       - name: Run xtask build
         run: cargo xtask build
 
-      # 8. 动态获取 xtask 生成的 zip 文件名
+      # 9. 动态获取 xtask 生成的 zip 文件名
       - name: Get Artifact Name
         id: artifact-name
         run: |
@@ -97,7 +131,7 @@ jobs:
           echo "name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
           echo "path=$FILE_PATH" >> $GITHUB_OUTPUT
 
-      # 9. 使用动态名称上传构建产物
+      # 10. 使用动态名称上传构建产物
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v7
         with:
@@ -105,3 +139,84 @@ jobs:
           name: ${{ steps.artifact-name.outputs.name }}
           # 精确指定要上传的那一个文件
           path: ${{ steps.artifact-name.outputs.path }}
+
+  # 构建通过后自动发布预发布版（仅 main 分支，PR 不发布）
+  prerelease:
+    name: Publish Pre-release
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 创建 Release 与对应的 git 标签
+
+    steps:
+      # 1. 下载构建产物
+      - name: Download build artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: dist
+
+      # 2. 创建/更新预发布版
+      #    标签形如 yumi-v2.0.2-pre.42（run_number 保证标签唯一，重跑同一 run 则原地更新）
+      - name: Publish pre-release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: yumi-v${{ needs.build.outputs.version }}-pre.${{ github.run_number }}
+          # 标签指向本次构建的确切提交，避免指向 main 的最新提交
+          target_commitish: ${{ github.sha }}
+          name: Yumi v${{ needs.build.outputs.version }}-pre.${{ github.run_number }}
+          body: |
+            > ⚠️ **预发布版（Pre-release）**：由 `main` 分支（`${{ github.sha }}`）自动构建，仅供测试。
+            > 稳定版本请等待版本标签（例如 `yumi-v2.0.2`）发布的正式版。
+          prerelease: true
+          make_latest: false
+          generate_release_notes: true
+          files: dist/*.zip
+          fail_on_unmatched_files: true
+
+  # 只有版本标签才发布正式版
+  release:
+    name: Publish Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 创建 Release 需要写权限
+
+    steps:
+      # 1. 校验标签版本与 Cargo.toml 一致，防止发布错误版本
+      - name: Verify version tag
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          CARGO_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          # 同时兼容 v2.0.2 与 yumi-v2.0.2 两种标签写法
+          tag_version="${TAG#yumi-}"
+          tag_version="${tag_version#v}"
+          if [ "$tag_version" != "$CARGO_VERSION" ]; then
+            echo "::error title=版本标签不匹配::标签 ${TAG}（版本 ${tag_version}）与 Cargo.toml 中的版本 ${CARGO_VERSION} 不一致，拒绝发布正式版。"
+            exit 1
+          fi
+          echo "版本校验通过：${TAG} -> ${CARGO_VERSION}"
+
+      # 2. 下载构建产物
+      - name: Download build artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: dist
+
+      # 3. 发布正式版
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Yumi ${{ github.ref_name }}
+          prerelease: false
+          make_latest: true
+          generate_release_notes: true
+          files: dist/*.zip
+          fail_on_unmatched_files: true
