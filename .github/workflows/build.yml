@@ -152,7 +152,7 @@ jobs:
     steps:
       # 1. 下载构建产物
       - name: Download build artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build.outputs.artifact-name }}
           path: dist
@@ -204,7 +204,7 @@ jobs:
 
       # 2. 下载构建产物
       - name: Download build artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build.outputs.artifact-name }}
           path: dist
