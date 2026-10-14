@@ -35,7 +35,7 @@ use aya::{
         uprobe::{UProbeAttachLocation, UProbeAttachPoint, UProbeLinkId, UProbeScope},
     },
 };
-use log::{info, warn};
+use log::{debug, info, warn};
 use mio::{Events, Interest, Poll, Registry, Token, unix::SourceFd};
 use std::{
     collections::BTreeMap,
@@ -46,9 +46,32 @@ use std::{
 };
 
 const LIBGUI_PATH: &str = "/system/lib64/libgui.so";
-const SYMBOL_SHORT: &str = "_ZN7android7Surface11queueBufferEP19ANativeWindowBufferi";
-const SYMBOL_LONG: &str =
-    "_ZN7android7Surface11queueBufferEP19ANativeWindowBufferiPNS_24SurfaceQueueBufferOutputE";
+
+/// libgui attach points, ordered so that the first symbol the device actually
+/// exports wins. `Surface::queueBuffer` changed shape twice, so a single name
+/// only works on one release family:
+///
+/// 1-2. Android <= 16: `queueBuffer(ANativeWindowBuffer*, int[, SurfaceQueueBufferOutput*])`.
+///      Exactly one of the two is compiled in; the build-time
+///      `wb_platform_api_improvements` flag picks which.
+/// 3.   Android 16 builds that merged the `sp<GraphicBuffer>` pointer cleanup.
+/// 4.   Android 17: `queueBuffer(const sp<GraphicBuffer>&, const sp<Fence>&, SurfaceQueueBufferOutput*)`,
+///      the overload `hook_queueBuffer` reaches for every frame.
+/// 5.   Android 17: the `SurfaceQueueBufferInput` overload.
+/// 6.   The `ANativeWindow::queueBuffer` entry itself, whose signature has been
+///      stable since Android 8; a last resort for future releases that reshape
+///      the `Surface::queueBuffer` overloads again.
+///
+/// Keep this list ordered: on Android 16 the Android 17 `sp<Fence>` overload
+/// also exists but is not on the render path, so it must not be tried first.
+const LIBGUI_SYMBOLS: &[&str] = &[
+    "_ZN7android7Surface11queueBufferEP19ANativeWindowBufferi",
+    "_ZN7android7Surface11queueBufferEP19ANativeWindowBufferiPNS_24SurfaceQueueBufferOutputE",
+    "_ZN7android7Surface11queueBufferEONS_2spINS_13GraphicBufferEEEiPNS_24SurfaceQueueBufferOutputE",
+    "_ZN7android7Surface11queueBufferERKNS_2spINS_13GraphicBufferEEERKNS1_INS_5FenceEEEPNS_24SurfaceQueueBufferOutputE",
+    "_ZN7android7Surface11queueBufferERKNS_2spINS_13GraphicBufferEEERKNS_23SurfaceQueueBufferInputEPNS_24SurfaceQueueBufferOutputE",
+    "_ZN7android7Surface16hook_queueBufferEP13ANativeWindowP19ANativeWindowBufferi",
+];
 
 enum Transport {
     Ring(RingBuf<MapData>),
@@ -209,24 +232,39 @@ impl FpsManager {
             return Ok(());
         };
         let scope = UProbeScope::OneProcess(pid);
-        let link = program
-            .attach(
-                UProbeAttachPoint::from(UProbeAttachLocation::from(SYMBOL_SHORT)),
+        // Aya resolves the symbol against the device library before attaching, so
+        // every candidate that the release does not export fails fast here.
+        let mut last_error = None;
+        for symbol in LIBGUI_SYMBOLS {
+            match program.attach(
+                UProbeAttachPoint::from(UProbeAttachLocation::from(*symbol)),
                 LIBGUI_PATH,
                 scope,
+            ) {
+                Ok(link) => {
+                    self.link = Some(link);
+                    self.current_pid = new_pid;
+                    info!("[FPS Monitor] Attached to PID {new_pid} via {symbol}");
+                    return Ok(());
+                }
+                Err(error) => {
+                    debug!(
+                        "[FPS Monitor] libgui symbol {symbol} unusable for PID {new_pid}: {error}"
+                    );
+                    last_error = Some(error);
+                }
+            }
+        }
+        let error = match last_error {
+            Some(error) => anyhow::Error::new(error),
+            None => anyhow::anyhow!("no libgui attach point configured"),
+        };
+        Err(error).with_context(|| {
+            format!(
+                "attach FPS probe to PID {new_pid}: none of the {} libgui symbols resolved",
+                LIBGUI_SYMBOLS.len()
             )
-            .or_else(|_| {
-                program.attach(
-                    UProbeAttachPoint::from(UProbeAttachLocation::from(SYMBOL_LONG)),
-                    LIBGUI_PATH,
-                    scope,
-                )
-            })
-            .with_context(|| format!("attach FPS probe to PID {new_pid}"))?;
-        self.link = Some(link);
-        self.current_pid = new_pid;
-        info!("[FPS Monitor] Attached to PID {new_pid}");
-        Ok(())
+        })
     }
 }
 
@@ -317,5 +355,32 @@ mod tests {
         assert!(!ring_unsupported(&error("RING_BUF", libc::EPERM)));
         assert!(!ring_unsupported(&error("RING_BUF", libc::ENOMEM)));
         assert!(!ring_unsupported(&error("OTHER", libc::EINVAL)));
+    }
+
+    #[test]
+    fn libgui_attach_points_are_ordered_and_unique() {
+        // Android <= 16 raw pointers first, then the Android 16 interim
+        // `sp<GraphicBuffer>&&` form, then the Android 17 overloads. Reordering
+        // these silently attaches to an overload that never runs: the Android 17
+        // `sp<Fence>` symbol also exists on some Android 16 builds, but the
+        // render path there calls the `sp<GraphicBuffer>&&` overload instead.
+        let position = |needle: &str| {
+            LIBGUI_SYMBOLS
+                .iter()
+                .position(|symbol| symbol.contains(needle))
+                .unwrap_or_else(|| panic!("missing libgui candidate containing {needle}"))
+        };
+        assert!(position("P19ANativeWindowBufferi") < position("ONS_2spINS_13GraphicBufferEEE"));
+        assert!(position("ONS_2spINS_13GraphicBufferEEE") < position("RKNS1_INS_5FenceEEE"));
+
+        assert!(
+            LIBGUI_SYMBOLS
+                .iter()
+                .all(|symbol| symbol.starts_with("_ZN7android7Surface"))
+        );
+        let mut unique = LIBGUI_SYMBOLS.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), LIBGUI_SYMBOLS.len());
     }
 }

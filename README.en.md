@@ -460,7 +460,7 @@ Attached to `tracepoint/sched/sched_switch`, triggered on every context switch, 
 
 #### FPS Probe (`yumi-ebpf`)
 
-Attached to `libgui.so`'s `Surface::queueBuffer` function (uprobe), triggered on every frame submission:
+Attached to a `libgui.so` frame submission function (uprobe), triggered on every frame submission. The `Surface::queueBuffer` symbol changed shape in Android 16 ROM backports and again in Android 17, so candidates are tried in order: the raw-pointer overload for Android 16 and below, the Android 16 interim `sp<GraphicBuffer>&&` overload, the Android 17 `sp<GraphicBuffer>`/`sp<Fence>` overloads, and finally the signature-stable `ANativeWindow` entry `hook_queueBuffer`:
 
   * **Kernel-side timestamp capture**: Records frame submission time via `bpf_ktime_get_ns()` and sends it through RingBuf, with a separate PerfEventArray fallback when RingBuf creation is unsupported. CPU, RingBuf FPS and PerfEvent FPS probes are compiled separately so their map failures are isolated. Device kernel features and permissions still determine availability.
   * **Per-PID uprobe attachment**: Each target process holds an independent eBPF instance. On PID switch, the old instance is automatically detached and a new one attached to the new PID, ensuring only the target process's frame events are captured.

@@ -460,7 +460,7 @@ yumi 使用两个 eBPF 探针进行内核级数据采集：
 
 #### FPS 探针 (`yumi-ebpf`)
 
-挂载到 `libgui.so` 的 `Surface::queueBuffer` 函数（uprobe），在每帧渲染提交时触发：
+挂载到 `libgui.so` 的帧提交函数（uprobe），在每帧渲染提交时触发。`Surface::queueBuffer` 的符号签名在 Android 16 回合并版本和 Android 17 上变过，因此按候选列表顺序尝试：Android 16 及以下的裸指针重载、Android 16 中间形态的 `sp<GraphicBuffer>&&` 重载、Android 17 的 `sp<GraphicBuffer>`/`sp<Fence>` 重载，最后回退到签名长期稳定的 `ANativeWindow` 入口 `hook_queueBuffer`：
 
   * **内核侧时间戳采集**: 在 eBPF 中通过 `bpf_ktime_get_ns()` 记录帧提交时间，通过 RingBuf 或兼容后端 PerfEventArray 传输到用户态。CPU、RingBuf FPS、PerfEvent FPS 分别编译，避免 map 加载失败相互影响。
   * **per-PID uprobe 挂载**: 每个目标进程持有独立的 eBPF 实例，PID 切换时自动 detach 旧实例并 attach 新实例，确保只捕获目标进程的帧事件。

@@ -5,6 +5,7 @@
 - 构建三个独立 ELF：`cpu`、`fps-ring`、`fps-perf`。CPU 不创建 FPS map。
 - `RING_BUF` 创建返回 `EINVAL`、`EOPNOTSUPP` 或 `ENOSYS` 时，尝试 PerfEventArray 后端；权限和内存错误保留完整错误链，不伪装成兼容性问题。
 - FPS 在事件缓冲区注册完成后才报告初始化成功；目标 PID 附加失败每 2 秒重试，切换 PID 清空采样基线。
+- libgui 探针按候选符号顺序附加：Android 16 及以下的 `Surface::queueBuffer(ANativeWindowBuffer*, int[, SurfaceQueueBufferOutput*])`、Android 16 回合并版本的 `sp<GraphicBuffer>&&` 重载、Android 17 的 `sp<GraphicBuffer>`/`sp<Fence>` 重载，最后回退到签名长期稳定的 `ANativeWindow` 入口 `hook_queueBuffer`。顺序不可调换：Android 16 上同时存在 17 的 `sp<Fence>` 重载但它不在渲染路径上，先试它会附加成功却收不到帧。每个候选失败输出完整错误，全部失败才上报附加失败。
 - RingBuf 和 perf 共用 16 字节事件布局（包含显式初始化的 padding）；perf 处理跨缓冲区边界、跨 CPU 时间排序、丢事件和 CPU 上下线。
 - 只发送新产生的帧间隔，不重放旧帧；CPU 样本保持 CPU ID 索引，前台负载采用最忙线程的完整累计快照差值。
 - CLG 在首个有效 CPU 样本到达后启动。FAS 还需要目标 PID 的有效帧。超过 2 秒无有效样本，或监控上报退出时，释放相关调频控制。
