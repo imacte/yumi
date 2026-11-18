@@ -58,15 +58,10 @@ fn nearest_index(frequencies: &[u32], perf: f32) -> usize {
     }
 }
 
-fn frequency_range(
-    frequencies: &[u32],
-    perf: f32,
-    floor: f32,
-    steps_below: usize,
-) -> FrequencyRange {
+fn frequency_range(frequencies: &[u32], perf: f32, floor: f32, steps_below: u32) -> FrequencyRange {
     let high = nearest_index(frequencies, perf);
     let low = high
-        .saturating_sub(steps_below)
+        .saturating_sub(steps_below as usize)
         .max(nearest_index(frequencies, floor).min(high));
     FrequencyRange {
         min: frequencies[low],
@@ -150,7 +145,7 @@ impl PolicyFrequency {
         self.applied
     }
 
-    pub fn range_for_perf(&self, perf: f32, floor: f32, steps_below: usize) -> FrequencyRange {
+    pub fn range_for_perf(&self, perf: f32, floor: f32, steps_below: u32) -> FrequencyRange {
         frequency_range(&self.frequencies, perf, floor, steps_below)
     }
 
@@ -290,6 +285,25 @@ mod tests {
             FrequencyRange {
                 min: 800_000,
                 max: 800_000
+            }
+        );
+    }
+
+    #[test]
+    fn configurable_width_can_pin_the_target_or_reach_the_floor() {
+        let frequencies = [300_000, 600_000, 1_200_000, 1_500_000];
+        assert_eq!(
+            frequency_range(&frequencies, 1.0, 0.25, 0),
+            FrequencyRange {
+                min: 1_500_000,
+                max: 1_500_000
+            }
+        );
+        assert_eq!(
+            frequency_range(&frequencies, 1.0, 0.25, u32::MAX),
+            FrequencyRange {
+                min: 600_000,
+                max: 1_500_000
             }
         );
     }

@@ -97,7 +97,7 @@ yumi offers five performance modes:
 
 ### CLG (CPU Load Governor) Overview
 
-CLG uses CPU utilization from eBPF, EMA smoothing, rate limits, and a headroom factor to set a frequency ceiling for each cluster. CLG allows up to two frequency steps below the ceiling, and FAS allows one. The applicable performance floor bounds the lower limit. By default, Fast mode sets its floor equal to its ceiling, allowing only the top frequency step.
+CLG uses CPU utilization from eBPF, EMA smoothing, rate limits, and a headroom factor to set a frequency ceiling for each cluster. In the WebUI’s Detailed Config view, each CLG mode and FAS can set Frequency steps below target (`freq_range_steps_below`). CLG defaults to two steps and FAS defaults to one. A value of 0 uses only the target frequency. The available frequency steps and performance floor bound the lower limit. By default, Fast mode sets its floor equal to its ceiling, allowing only the top frequency step.
 
 In the WebUI's Detailed Config view, each CLG mode and FAS can select a CPU governor. The YAML keys are each mode's `cpu_load_governor.governor` in `config.yaml` and `fas_rules.governor` in `rules.yaml`. The default, `system`, uses the governor active before Yumi took control. A supported `schedutil` governor selects frequencies within the range based on load. The `performance` governor requests the top of the range.
 
@@ -179,6 +179,7 @@ FAS parameters are configured in the `fas_rules` section of `rules.yaml`:
 ```yaml
 fas_rules:
   governor: system
+  freq_range_steps_below: 1
   fps_gears: [30.0, 60.0, 90.0, 120.0, 144.0]
   fps_margin: 3.0
 
@@ -245,6 +246,7 @@ fas_rules:
 | `fps_margin` | string | "3.0" | Frame rate margin (fps). EMA budget = 1000 / (target − margin), providing a tolerance buffer. |
 | `pid.kp / ki / kd` | float | 0.050/0.010/0.006 | PID controller proportional, integral, and derivative coefficients. |
 | `auto_capacity_weight` | bool | true | Whether to auto-detect core cluster capacity weights. When disabled, uses manually configured `cluster_profiles`. |
+| `freq_range_steps_below` | int | 1 | Maximum steps below the target frequency. Set to 0 to use only the target frequency. |
 | `perf_floor` | float | 0.22 | Minimum perf_index (dynamically raised for high-refresh games). |
 | `perf_ceil` | float | 1.0 | Maximum perf_index. |
 | `perf_init` | float | 0.45 | Initial perf_index on normal startup. |
@@ -351,6 +353,7 @@ Each performance mode can independently configure CPU Load Governor (CLG) parame
 powersave:
   cpu_load_governor:
     governor: system
+    freq_range_steps_below: 2
     up_threshold: 0.85
     down_threshold: 0.60
     smoothing_up: 0.40
@@ -372,6 +375,7 @@ powersave:
 balance:
   cpu_load_governor:
     governor: system
+    freq_range_steps_below: 2
     up_threshold: 0.80
     down_threshold: 0.50
     smoothing_up: 0.60
@@ -393,6 +397,7 @@ balance:
 performance:
   cpu_load_governor:
     governor: system
+    freq_range_steps_below: 2
     up_threshold: 0.65
     down_threshold: 0.40
     smoothing_up: 0.80
@@ -414,6 +419,7 @@ performance:
 fast:
   cpu_load_governor:
     governor: system
+    freq_range_steps_below: 2
     up_threshold: 0.01
     down_threshold: 0.01
     smoothing_up: 1.0
@@ -442,6 +448,7 @@ fast:
 | `up_rate_limit_ticks` | int | 2 | Ramp-up rate limit (in ticks). Boost only after N consecutive high-load ticks to prevent transient spikes. |
 | `headroom_factor` | float | 1.25 | Target perf = actual load × headroom, providing frequency margin; headroom transitions linearly near up_threshold to avoid step oscillation. |
 | `headroom_ramp` | float | 0.15 | Headroom transition width: as load rises from up_threshold - headroom_ramp to up_threshold, headroom ramps linearly from 1.0 to headroom_factor. |
+| `freq_range_steps_below` | int | 2 | Maximum steps below the target frequency. Set to 0 to use only the target frequency. |
 | `perf_floor` | float | 0.15 | Performance floor. |
 | `perf_ceil` | float | 1.0 | Performance ceiling. |
 | `perf_init` | float | 0.50 | Initial performance value. |

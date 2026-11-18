@@ -61,20 +61,30 @@ const isObj = (v: any) => v && typeof v === 'object' && !Array.isArray(v);
 const isGovernorPath = (path: string) => path === 'fas_rules/governor'
   || /^(powersave|balance|performance|fast)\/(cpu_load_governor|CpuLoadGovernor)\/governor$/.test(path);
 
-const withGovernor = (config: any) => ({
+const isFrequencyStepsPath = (path: string) => path.endsWith('/freq_range_steps_below');
+const isFrequencySteps = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 0xffffffff;
+const editingFrequencySteps = computed(() => isFrequencyStepsPath(editingKeyPath.value));
+const validFrequencySteps = computed(() => /^\d+$/.test(editingValue.value)
+  && isFrequencySteps(Number(editingValue.value)));
+
+const withFrequencySettings = (config: any, defaultSteps: number) => ({
   ...config,
-  governor: typeof config?.governor === 'string' ? config.governor.trim() || 'system' : 'system'
+  governor: typeof config?.governor === 'string' ? config.governor.trim() || 'system' : 'system',
+  freq_range_steps_below: isFrequencySteps(config?.freq_range_steps_below)
+    ? config.freq_range_steps_below
+    : defaultSteps
 });
 
 const displayedData = computed(() => {
   const data = { ...currentData.value };
   if (activeTab.value === 'rules') {
-    data.fas_rules = withGovernor(data.fas_rules);
+    data.fas_rules = withFrequencySettings(data.fas_rules, 1);
   } else {
     for (const mode of modeActions.value) {
       const config = data[mode.modeKey];
       const key = config?.CpuLoadGovernor && !config.cpu_load_governor ? 'CpuLoadGovernor' : 'cpu_load_governor';
-      data[mode.modeKey] = { ...config, [key]: withGovernor(config?.[key]) };
+      data[mode.modeKey] = { ...config, [key]: withFrequencySettings(config?.[key], 2) };
     }
   }
   return data;
@@ -187,6 +197,7 @@ const handleItemClick = (fullPath: string, value: any) => {
 };
 
 const confirmEdit = () => {
+  if (editingFrequencySteps.value && !validFrequencySteps.value) return;
   let val: any = editingValue.value;
   if (editingType.value === 'number') val = Number(val);
   
@@ -269,7 +280,8 @@ const RecursiveItem = defineComponent({
 
       const governor = isGovernorPath(props.path);
       return h(Cell, {
-        title: governor ? t('cpu_governor') : props.name,
+        title: governor ? t('cpu_governor')
+          : isFrequencyStepsPath(props.path) ? t('freq_range_steps_below') : props.name,
         center: true,
         isLink: typeof props.value !== 'boolean',
         onClick: () => handleItemClick(props.path, props.value)
@@ -327,10 +339,13 @@ const RecursiveItem = defineComponent({
       <div style="height: 60px;"></div>
     </div>
 
-    <van-dialog v-model:show="showEditDialog" :title="t('edit')" show-cancel-button @confirm="confirmEdit">
+    <van-dialog v-model:show="showEditDialog" :title="editingFrequencySteps ? t('freq_range_steps_below') : t('edit')"
+      :confirm-button-disabled="editingFrequencySteps && !validFrequencySteps" show-cancel-button @confirm="confirmEdit">
       <div class="dialog-content">
-        <div class="path-hint">{{ editingKeyPath.replace(/\//g, ' > ') }}</div>
-        <van-field v-model="editingValue" :type="editingType === 'number' ? 'number' : 'text'" input-align="center" border autofocus />
+        <div class="path-hint">{{ editingFrequencySteps ? t('freq_range_steps_hint') : editingKeyPath.replace(/\//g, ' > ') }}</div>
+        <van-field v-model="editingValue" :type="editingType === 'number' ? 'number' : 'text'"
+          :error-message="editingFrequencySteps && !validFrequencySteps ? t('freq_range_steps_invalid') : undefined"
+          input-align="center" border autofocus />
       </div>
     </van-dialog>
 

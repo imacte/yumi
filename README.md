@@ -97,7 +97,7 @@ yumi 提供五种性能模式：
 
 ### CLG (CPU Load Governor) 说明
 
-CLG 基于 eBPF 采集的 CPU 利用率，结合 EMA 平滑、升降频速率限制和 headroom 因子计算每个簇的频率上限。CLG 的下限最多比上限低两档，FAS 的下限最多低一档。下限受相应性能地板约束。极速模式的默认地板与上限相同，因此只有最高一档可用。
+CLG 基于 eBPF 采集的 CPU 利用率，结合 EMA 平滑、升降频速率限制和 headroom 因子计算每个簇的频率上限。在 WebUI 的「详细配置」中，各 CLG 模式和 FAS 可分别设置「频率下探档数」（`freq_range_steps_below`）。CLG 默认最多下探两档，FAS 默认一档。填 0 只使用目标频点，实际下探幅度受各簇可用档位和性能地板限制。极速模式的默认地板与上限相同，因此只有最高一档可用。
 
 在 WebUI 的「详细配置」中，可以为每个 CLG 模式和 FAS 分别选择 CPU 调速器。YAML 配置项为 `config.yaml` 中各模式的 `cpu_load_governor.governor` 和 `rules.yaml` 中的 `fas_rules.governor`。默认 `system` 沿用接管前的调速器。设备支持 `schedutil` 时可以用它在区间内随负载调频，`performance` 则会请求区间上限。
 
@@ -179,6 +179,7 @@ FAS 的参数通过 `rules.yaml` 中的 `fas_rules` 节进行配置：
 ```yaml
 fas_rules:
   governor: system
+  freq_range_steps_below: 1
   fps_gears: [30.0, 60.0, 90.0, 120.0, 144.0]
   fps_margin: 3.0
 
@@ -245,6 +246,7 @@ fas_rules:
 | `fps_margin` | string | "3.0" | 帧率余量（fps），EMA 预算 = 1000/(target - margin)，提供容错空间。 |
 | `pid.kp / ki / kd` | float | 0.050/0.010/0.006 | PID 控制器的比例、积分、微分系数。 |
 | `auto_capacity_weight` | bool | true | 是否自动探测各核心簇容量权重。关闭时使用 `cluster_profiles` 手动配置。 |
+| `freq_range_steps_below` | int | 1 | 下限最多比目标频点低几档。填 0 只使用目标频点。 |
 | `perf_floor` | float | 0.22 | perf_index 下限（高刷游戏会动态抬高）。 |
 | `perf_ceil` | float | 1.0 | perf_index 上限。 |
 | `perf_init` | float | 0.45 | 正常启动时的初始 perf_index。 |
@@ -351,6 +353,7 @@ CpuIdle:
 powersave:
   cpu_load_governor:
     governor: system
+    freq_range_steps_below: 2
     up_threshold: 0.85
     down_threshold: 0.60
     smoothing_up: 0.40
@@ -372,6 +375,7 @@ powersave:
 balance:
   cpu_load_governor:
     governor: system
+    freq_range_steps_below: 2
     up_threshold: 0.80
     down_threshold: 0.50
     smoothing_up: 0.60
@@ -393,6 +397,7 @@ balance:
 performance:
   cpu_load_governor:
     governor: system
+    freq_range_steps_below: 2
     up_threshold: 0.65
     down_threshold: 0.40
     smoothing_up: 0.80
@@ -414,6 +419,7 @@ performance:
 fast:
   cpu_load_governor:
     governor: system
+    freq_range_steps_below: 2
     up_threshold: 0.01
     down_threshold: 0.01
     smoothing_up: 1.0
@@ -442,6 +448,7 @@ fast:
 | `up_rate_limit_ticks` | int | 2 | 升频速率限制（tick 数）。连续 N tick 高负载才升频，防止瞬时毛刺。 |
 | `headroom_factor` | float | 1.25 | 目标性能 = 实际负载 × headroom，提供频率余量；headroom 在 up_threshold 附近线性渐变至该值，避免阶跃振荡。 |
 | `headroom_ramp` | float | 0.15 | headroom 过渡带宽度：负载从 up_threshold-headroom_ramp 升至 up_threshold 时，headroom 由 1.0 线性渐变至 headroom_factor。 |
+| `freq_range_steps_below` | int | 2 | 下限最多比目标频点低几档。填 0 只使用目标频点。 |
 | `perf_floor` | float | 0.15 | 性能下限。 |
 | `perf_ceil` | float | 1.0 | 性能上限。 |
 | `perf_init` | float | 0.50 | 初始性能值。 |

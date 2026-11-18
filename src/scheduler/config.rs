@@ -37,6 +37,7 @@ fn default_language() -> String { "en".to_string() }
 pub struct CpuLoadGovernorConfig {
     #[serde(default = "crate::utils::default_true")] pub enabled: bool,
     #[serde(default)] pub governor: Option<String>,
+    #[serde(default = "d_clg_freq_range_steps_below")] pub freq_range_steps_below: u32,
     #[serde(default = "d_clg_up_thresh")] pub up_threshold: f32,
     #[serde(default = "d_clg_down_thresh")] pub down_threshold: f32,
     #[serde(default = "d_clg_smooth_up")] pub smoothing_up: f32,
@@ -68,6 +69,7 @@ pub struct CpuLoadGovernorConfig {
     #[serde(default = "d_clg_spike_decay")] pub spike_decay: f32,
 }
 
+fn d_clg_freq_range_steps_below() -> u32 { 2 }
 fn d_clg_up_thresh() -> f32 { 0.80 }
 fn d_clg_down_thresh() -> f32 { 0.50 }
 fn d_clg_smooth_up() -> f32 { 0.60 }
@@ -92,6 +94,7 @@ impl Default for CpuLoadGovernorConfig {
         Self {
             enabled: true,
             governor: None,
+            freq_range_steps_below: d_clg_freq_range_steps_below(),
             up_threshold: d_clg_up_thresh(),
             down_threshold: d_clg_down_thresh(),
             smoothing_up: d_clg_smooth_up(),

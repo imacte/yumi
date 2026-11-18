@@ -14,6 +14,7 @@ ignored_apps:
 fas_rules:
   # system 沿用接管前的 CPU 调速器，也可以填设备支持的名称（如 schedutil）。
   governor: system
+  freq_range_steps_below: 1  # 频率下限最多比目标频点低几档，0 表示单档
   # ── 全局默认档位 (未在 per_app_profiles 中配置的游戏使用) ──
   fps_gears: [30.0, 60.0, 90.0, 120.0, 144.0]
   fps_margin: 3.0

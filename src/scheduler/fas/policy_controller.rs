@@ -42,9 +42,9 @@ impl PolicyController {
         perf * (1.0 - blend) + perf.powf(weight.sqrt()) * blend
     }
 
-    pub(super) fn range_for_perf(&self, perf: f32, floor: f32) -> FrequencyRange {
+    pub(super) fn range_for_perf(&self, perf: f32, floor: f32, steps_below: u32) -> FrequencyRange {
         self.frequency
-            .range_for_perf(self.adjust_perf(perf), self.adjust_perf(floor), 1)
+            .range_for_perf(self.adjust_perf(perf), self.adjust_perf(floor), steps_below)
     }
 
     pub(super) fn range_changed(&self, next: FrequencyRange, hysteresis: f32) -> bool {

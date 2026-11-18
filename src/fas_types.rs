@@ -104,6 +104,8 @@ pub struct PerAppProfile {
 pub struct FasRulesConfig {
     #[serde(default)]
     pub governor: Option<String>,
+    #[serde(default = "d_freq_range_steps_below")]
+    pub freq_range_steps_below: u32,
     #[serde(default = "default_fps_gears")]       pub fps_gears: Vec<f32>,
     #[serde(default = "default_fps_margin")]       pub fps_margin: f32,
     #[serde(default)]                              pub pid: PidCoefficients,
@@ -181,6 +183,7 @@ fn d_perf_floor() -> f32 { 0.22 }
 fn d_perf_ceil() -> f32 { 1.0 }
 fn d_perf_init() -> f32 { 0.45 }
 fn d_perf_cold() -> f32 { 0.85 }
+fn d_freq_range_steps_below() -> u32 { 1 }
 pub fn d_hysteresis() -> f32 { 0.015 }
 pub fn d_heavy_ms() -> f32 { 150.0 }
 pub fn d_load_ms() -> f32 { 2500.0 }
@@ -298,6 +301,7 @@ impl Default for FasRulesConfig {
     fn default() -> Self {
         Self {
             governor: None,
+            freq_range_steps_below: d_freq_range_steps_below(),
             fps_gears: default_fps_gears(), fps_margin: default_fps_margin(),
             pid: PidCoefficients::default(),
             cluster_profiles: default_cluster_profiles(),

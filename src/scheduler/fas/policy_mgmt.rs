@@ -47,11 +47,13 @@ impl FasController {
         let old_ki = self.cfg.pid.ki;
         let old_kd = self.cfg.pid.kd;
         let limits_changed = self.cfg.perf_floor != new_rules.perf_floor
-            || self.cfg.perf_ceil != new_rules.perf_ceil;
+            || self.cfg.perf_ceil != new_rules.perf_ceil
+            || self.cfg.freq_range_steps_below != new_rules.freq_range_steps_below;
 
         // 安全更新所有不影响状态机连续性的参数
         self.cfg.perf_floor = new_rules.perf_floor;
         self.cfg.perf_ceil = new_rules.perf_ceil;
+        self.cfg.freq_range_steps_below = new_rules.freq_range_steps_below;
         self.cfg.perf_init = new_rules.perf_init;
         self.cfg.perf_cold_boot = new_rules.perf_cold_boot;
         self.cfg.freq_hysteresis = new_rules.freq_hysteresis;
@@ -196,7 +198,7 @@ impl FasController {
             policy.freq_hold_frames = policy.freq_hold_frames.saturating_sub(1);
             if hold && !refresh && !policy.pending { continue; }
 
-            let range = policy.range_for_perf(effective_perf, floor);
+            let range = policy.range_for_perf(effective_perf, floor, self.cfg.freq_range_steps_below);
             if policy.pending || (range != policy.frequency.applied_range()
                 && (refresh || policy.range_changed(range, self.cfg.freq_hysteresis)))
             {

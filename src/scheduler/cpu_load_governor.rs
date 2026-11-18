@@ -36,8 +36,12 @@ struct ClusterState {
 }
 
 impl ClusterState {
-    fn apply_range(&mut self, floor: f32) -> FrequencyRange {
-        let range = self.frequency.range_for_perf(self.current_perf, floor, 2);
+    fn apply_range(&mut self, config: &CpuLoadGovernorConfig) -> FrequencyRange {
+        let range = self.frequency.range_for_perf(
+            self.current_perf,
+            config.perf_floor,
+            config.freq_range_steps_below,
+        );
         self.frequency.apply(range);
         range
     }
@@ -101,7 +105,7 @@ impl CpuLoadGovernor {
                 up_wait: 0,
                 last_util: 0.0,
             };
-            let range = cluster.apply_range(self.cfg.perf_floor);
+            let range = cluster.apply_range(&self.cfg);
 
             info!("{}", t_with_args("clg-init", &fluent_args!(
                 "pid" => pid.to_string(),
@@ -148,7 +152,7 @@ impl CpuLoadGovernor {
                 cluster.frequency.select_governor(self.cfg.governor.as_deref());
             }
             cluster.current_perf = cluster.current_perf.clamp(self.cfg.perf_floor, self.cfg.perf_ceil);
-            cluster.apply_range(self.cfg.perf_floor);
+            cluster.apply_range(&self.cfg);
         }
         debug!("{}", t_with_args("clg-config-reloaded", &fluent_args!(
             "up" => format!("{:.2}", self.cfg.up_threshold),
@@ -207,7 +211,7 @@ impl CpuLoadGovernor {
 
                 // 升频速率限制：必须连续 up_rate_limit_ticks 才执行
                 if cluster.up_wait < self.cfg.up_rate_limit_ticks {
-                    cluster.apply_range(self.cfg.perf_floor);
+                    cluster.apply_range(&self.cfg);
                     continue;
                 }
 
@@ -250,7 +254,7 @@ impl CpuLoadGovernor {
             }
 
             cluster.current_perf = cluster.current_perf.clamp(self.cfg.perf_floor, self.cfg.perf_ceil);
-            cluster.apply_range(self.cfg.perf_floor);
+            cluster.apply_range(&self.cfg);
         }
 
         self.log_counter += 1;
