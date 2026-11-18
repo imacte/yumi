@@ -33,7 +33,7 @@
     "unplugin-vue-components": "^32.1.0",
     "vite": "^8.1.5",
     "vite-plugin-vue-devtools": "^8.1.5",
-    "vue-tsc": "^3.3.7"
+    "vue-tsc": "^3.3.9"
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
