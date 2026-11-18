@@ -22,10 +22,12 @@ CpuIdle:
   current_governor: ""
 
 # --- 性能模式 ---
+# governor: system 沿用接管前的 CPU 调速器，也可以填设备支持的名称（如 schedutil）。
 
 # 省电模式
 powersave:
   cpu_load_governor:
+    governor: system
     up_threshold: 0.85
     down_threshold: 0.60
     smoothing_up: 0.40
@@ -48,6 +50,7 @@ powersave:
 # 均衡模式
 balance:
   cpu_load_governor:
+    governor: system
     up_threshold: 0.80
     down_threshold: 0.50
     smoothing_up: 0.60
@@ -70,6 +73,7 @@ balance:
 # 性能模式
 performance:
   cpu_load_governor:
+    governor: system
     up_threshold: 0.65
     down_threshold: 0.40
     smoothing_up: 0.80
@@ -92,6 +96,7 @@ performance:
 # 极速模式
 fast:
   cpu_load_governor:
+    governor: system
     up_threshold: 0.01
     down_threshold: 0.01
     smoothing_up: 1.0

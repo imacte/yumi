@@ -73,18 +73,15 @@ sysfs-umount2-failed = [SysFS] umount2({ $path }) 失败: { $error }
 sysfs-write-freq-failed = [SysFS] 写入频率 { $freq } 失败: { $error }
 
 # --- CLG ---
-clg-init = [CLG] P{ $pid } 初始化 | 核心={ $cpus } | 频率={ $fmin }-{ $fmax } MHz | P={ $perf } -> { $freq } kHz
+clg-init = [CLG] P{ $pid } 初始化 | 核心={ $cpus } | 可用频率={ $fmin }-{ $fmax } MHz | P={ $perf } -> 区间 { $freq } kHz
 clg-activated = [CLG] CPU 负载调频器已激活，共接管 { $count } 个集群
 clg-no-clusters = [CLG] CPU 负载调频器: 未找到有效集群，保持未激活状态
 clg-deactivated = [CLG] CPU 负载调频器已停用
 clg-config-reloaded = [CLG] 配置已热重载 | 升频={ $up } 降频={ $down } 地板={ $floor } 天花板={ $ceil }
 clg-perf-clamped = [CLG] 配置 perf_floor > perf_ceil ({ $floor } > { $ceil })，已将 perf_floor 限制为 perf_ceil
-clg-restore = [CLG] P{ $pid } 已恢复 | governor={ $governor } min={ $min } kHz max={ $max } kHz
-clg-tick-log = [CLG] P{ $pid } 利用率={ $util }% perf={ $perf } 频率={ $freq }kHz boost={ $boost }kHz
-clg-writer-invalid = [CLG] P{ $pid } sysfs 写入器无效 (max_valid: { $max_valid }, min_valid: { $min_valid })，已跳过。
+clg-tick-log = [CLG] P{ $pid } 利用率={ $util }% perf={ $perf } 区间={ $freq } kHz boost={ $boost } kHz
 
 # --- FAS ---
-fas-freq-mismatch = [FAS] P{ $pid }: 频率不匹配！预期 { $min }-{ $max }，实际 { $actual } -> 正在紧急重写
 fas-auto-capacity = [FAS] 自动计算算力权重:
 fas-auto-capacity-core = [FAS]   P{ $pid }: 算力={ $cap } -> 权重={ $weight }
 fas-policy-init = [FAS] P{ $pid } { $min }-{ $max } MHz | 权重={ $weight }
@@ -103,7 +100,6 @@ fas-no-profile = [FAS] 未找到 '{ $pkg }' 的专属配置，使用全局档位
 fas-ignore-write = [FAS] P{ $pid } 忽略写入 = { $ignore }
 fas-pid-reloaded = [FAS] PID 系数热重载: Kp={ $kp } Ki={ $ki } Kd={ $kd }
 fas-rules-reloaded = [FAS] 规则已热重载 (冗余={ $margin }, 地板={ $floor }, 天花板={ $ceil }, 配置数={ $profiles })
-fas-policy-writer-invalid = [FAS] P{ $pid } 策略写入器无效 (max_valid: { $max_valid }, min_valid: { $min_valid })，已跳过。
 
 # --- Scheduler: Settings ---
 apply-settings-for-mode = 正在应用模式: { $mode }

@@ -12,6 +12,8 @@ ignored_apps:
   - com.android.systemui
 
 fas_rules:
+  # system 沿用接管前的 CPU 调速器，也可以填设备支持的名称（如 schedutil）。
+  governor: system
   # ── 全局默认档位 (未在 per_app_profiles 中配置的游戏使用) ──
   fps_gears: [30.0, 60.0, 90.0, 120.0, 144.0]
   fps_margin: 3.0
@@ -111,6 +113,7 @@ fas_rules:
   app_switch_resume_perf: 0.60
 
   # ── 其他底层机制 ──
-  freq_force_reapply_interval: 30
+  freq_force_reapply_interval: 30  # 每隔多少帧跳过频率迟滞重新评估，0 = 禁用
+  verify_freq_interval_secs: 3    # 检查有效频率上下限的间隔，0 = 禁用
   fixed_max_frame_ms: 500.0
   cold_boot_ms: 3500

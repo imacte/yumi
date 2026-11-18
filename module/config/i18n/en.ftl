@@ -74,18 +74,15 @@ sysfs-umount2-failed = [SysFS] umount2({ $path }) failed: { $error }
 sysfs-write-freq-failed = [SysFS] Write freq { $freq } failed: { $error }
 
 # --- CLG ---
-clg-init = [CLG] P{ $pid } init | cores={ $cpus } | freqs={ $fmin }-{ $fmax } MHz | P={ $perf } -> { $freq } kHz
+clg-init = [CLG] P{ $pid } init | cores={ $cpus } | available={ $fmin }-{ $fmax } MHz | P={ $perf } -> range { $freq } kHz
 clg-activated = [CLG] CPU Load Governor activated, taking over { $count } cluster(s)
 clg-no-clusters = [CLG] CPU Load Governor: no valid clusters found, staying inactive
 clg-deactivated = [CLG] CPU Load Governor deactivated
 clg-config-reloaded = [CLG] config hot-reloaded | up={ $up } down={ $down } floor={ $floor } ceil={ $ceil }
 clg-perf-clamped = [CLG] config perf_floor > perf_ceil ({ $floor } > { $ceil }), clamped perf_floor to perf_ceil
-clg-restore = [CLG] P{ $pid } restored | governor={ $governor } min={ $min } kHz max={ $max } kHz
-clg-tick-log = [CLG] P{ $pid } util={ $util }% perf={ $perf } freq={ $freq }kHz boost={ $boost }kHz
-clg-writer-invalid = [CLG] P{ $pid } sysfs writer invalid (max_valid: { $max_valid }, min_valid: { $min_valid }), skipping.
+clg-tick-log = [CLG] P{ $pid } util={ $util }% perf={ $perf } range={ $freq } kHz boost={ $boost } kHz
 
 # --- FAS ---
-fas-freq-mismatch = [FAS] P{ $pid }: freq mismatch! expected { $min }-{ $max }, actual { $actual } -> emergency reapply
 fas-auto-capacity = [FAS] auto capacity weight:
 fas-auto-capacity-core = [FAS]   P{ $pid }: cap={ $cap } -> w={ $weight }
 fas-policy-init = [FAS] P{ $pid } { $min }-{ $max } MHz | w={ $weight }
@@ -104,7 +101,6 @@ fas-no-profile = [FAS] no per-app profile for '{ $pkg }', using global gears { $
 fas-ignore-write = [FAS] P{ $pid } ignore_write = { $ignore }
 fas-pid-reloaded = [FAS] PID coefficients hot-reloaded: Kp={ $kp } Ki={ $ki } Kd={ $kd }
 fas-rules-reloaded = [FAS] rules hot-reloaded (margin={ $margin }, floor={ $floor }, ceil={ $ceil }, profiles={ $profiles })
-fas-policy-writer-invalid = [FAS] P{ $pid } policy writer invalid (max_valid: { $max_valid }, min_valid: { $min_valid }), skipping.
 
 # --- Scheduler: Settings ---
 apply-settings-for-mode = Applying settings for mode: { $mode }

@@ -16,9 +16,9 @@
  */
 
 use crate::fas_types::{FasRulesConfig, ClusterProfile};
-use crate::utils::FastWriter;
+use crate::scheduler::cpufreq::PolicyFrequency;
 use std::fs;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use log::{info, warn};
 
 use crate::i18n::{t, t_with_args};
@@ -36,9 +36,18 @@ impl FasController {
         rules.normalize();
         let new_rules = &rules;
 
+        if self.cfg.governor != new_rules.governor {
+            for policy in &mut self.policies {
+                policy.frequency.select_governor(new_rules.governor.as_deref());
+            }
+            self.cfg.governor.clone_from(&new_rules.governor);
+        }
+
         let old_kp = self.cfg.pid.kp;
         let old_ki = self.cfg.pid.ki;
         let old_kd = self.cfg.pid.kd;
+        let limits_changed = self.cfg.perf_floor != new_rules.perf_floor
+            || self.cfg.perf_ceil != new_rules.perf_ceil;
 
         // 安全更新所有不影响状态机连续性的参数
         self.cfg.perf_floor = new_rules.perf_floor;
@@ -133,6 +142,12 @@ impl FasController {
 
         self.temp_threshold = new_rules.core_temp_threshold;
         self.refresh_cached_values();
+        if limits_changed {
+            for policy in &mut self.policies {
+                policy.pending = true;
+            }
+            self.apply_freqs();
+        }
 
         info!("{}", t_with_args("fas-rules-reloaded", &fluent_args!(
             "margin" => format!("{:.1}", self.fps_margin),
@@ -142,21 +157,23 @@ impl FasController {
         )));
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  频率应用 — CPU 负载感知
-    //
-    //  利用 core_utils 判断 cluster 负载，低负载 cluster 用 relaxed 模式
-    // ════════════════════════════════════════════════════════════
-
     pub(super) fn apply_freqs(&mut self) {
         self.freq_force_counter = self.freq_force_counter.wrapping_add(1);
-        let force = self.freq_force_counter % self.cfg.freq_force_reapply_interval == 0;
+        let interval = self.cfg.freq_force_reapply_interval;
+        let refresh = interval > 0 && self.freq_force_counter % interval == 0;
 
-        let mut effective_perf = self.perf_index.clamp(0.0, 1.0);
+        let verify_interval = self.cfg.verify_freq_interval_secs;
+        let verify = verify_interval > 0
+            && self.limits_checked_at.elapsed() >= Duration::from_secs(verify_interval.into());
+        if verify {
+            self.limits_checked_at = Instant::now();
+        }
+
+        let floor = self.effective_perf_floor().min(self.cfg.perf_ceil);
+        let mut effective_perf = self.perf_index.clamp(floor, self.cfg.perf_ceil);
 
         // 利用率软封顶 — 使用 EMA 平滑值，增加多重保护防止断崖
         let in_jank = self.jank_cooldown > 0 || self.jank_streak > 0;
-        let floor = self.effective_perf_floor();
         let near_floor = self.perf_index < floor + 0.10;
         // 热降频检测：fg_util 骤降但 perf_index 高 → 内核在限频，util 数据不可信
         let thermal_suspected = self.ema_fg_util < 0.25 && self.perf_index > 0.50;
@@ -170,38 +187,20 @@ impl FasController {
             }
         }
 
-        let ratio = effective_perf;
-
-        // 计算各 policy 的目标频率
         for policy in &mut self.policies {
-            if policy.freq_hold_frames > 0 && !force {
-                policy.freq_hold_frames = policy.freq_hold_frames.saturating_sub(1);
-                continue;
+            if verify && !policy.pending {
+                policy.frequency.verify_limits();
             }
+
+            let hold = policy.freq_hold_frames > 0;
             policy.freq_hold_frames = policy.freq_hold_frames.saturating_sub(1);
+            if hold && !refresh && !policy.pending { continue; }
 
-            let w = policy.cluster_profile.capacity_weight.max(0.1);
-            // 原始 ratio.powf(w) 对大核 (w=2.3) 惩罚过重：
-            // perf=0.50 时超大核只给 0.50^2.3 ≈ 20% 频率，导致高刷游戏跑不上去。
-            // 改为 sqrt(w) 指数 + 线性混合，大幅缓解大核频率被压制。
-            let pow_adj = ratio.powf(w.sqrt());
-            let linear_adj = ratio;
-            let blend = (w - 1.0).clamp(0.0, 1.5) / 1.5;
-            let adj = linear_adj * (1.0 - blend * 0.5) + pow_adj * (blend * 0.5);
-            let target_freq = policy.find_nearest_freq(adj);
-
-            if target_freq != policy.current_freq {
-                let diff = (policy.find_nearest_freq(ratio) as f32 / policy.freq_max
-                    - policy.current_ratio()).abs();
-
-                // 变化小于迟滞阈值且非强制时跳过
-                if diff <= self.cfg.freq_hysteresis && !force { continue; }
-
-                // 根据 cluster 实际负载选择写入策略
-                // 如果该 cluster 对应的核心利用率低于 30%，用 relaxed 模式节电
-                policy.apply_freq_locked(target_freq);
-            } else if force {
-                policy.force_reapply();
+            let range = policy.range_for_perf(effective_perf, floor);
+            if policy.pending || (range != policy.frequency.applied_range()
+                && (refresh || policy.range_changed(range, self.cfg.freq_hysteresis)))
+            {
+                policy.apply_range(range);
             }
         }
     }
@@ -216,7 +215,7 @@ impl FasController {
         let fas_rules = &rules;
 
         self.reset_all_freqs();
-        self.policies.clear();
+        if !self.restore.is_empty() { return; }
         self.cfg = fas_rules.clone();
         self.cfg.migrate_legacy_margins();
 
@@ -256,53 +255,9 @@ impl FasController {
 
         for (idx, policy) in clusters.iter().enumerate() {
             let pid = policy.id;
-            let mut freqs: Vec<u32> = fs::read_to_string(
-                format!("/sys/devices/system/cpu/cpufreq/policy{}/scaling_available_frequencies", pid))
-                .unwrap_or_default()
-                .split_whitespace()
-                .filter_map(|s| s.parse().ok()).collect();
-            if freqs.is_empty() { continue; }
-            freqs.sort_unstable();
-            freqs.dedup();
-
-            // 合并 boost 频率（部分平台额外暴露的高频点），去重排序
-            if !policy.boost_frequencies.is_empty() {
-                freqs.extend(&policy.boost_frequencies);
-                freqs.sort_unstable();
-                freqs.dedup();
-            }
-
-            let max_f = *freqs.last().unwrap();
-            let mut mw = FastWriter::new(format!(
-                "/sys/devices/system/cpu/cpufreq/policy{}/scaling_max_freq", pid));
-            let mut nw = FastWriter::new(format!(
-                "/sys/devices/system/cpu/cpufreq/policy{}/scaling_min_freq", pid));
-
-            // 检查 FastWriter 是否成功打开文件，跳过无效的 policy
-            if !mw.is_valid() || !nw.is_valid() {
-                warn!("{}", t_with_args("fas-policy-writer-invalid", &fluent_args!(
-                    "pid" => pid.to_string(),
-                    "max_valid" => mw.is_valid().to_string(),
-                    "min_valid" => nw.is_valid().to_string()
-                )));
-                continue;
-            }
-
-            let base = format!("/sys/devices/system/cpu/cpufreq/policy{pid}");
-            let original = (|| -> Option<(String, u32, u32)> {
-                let governor = fs::read_to_string(format!("{base}/scaling_governor")).ok()?.trim().to_string();
-                if governor.is_empty() { return None; }
-                let min = fs::read_to_string(format!("{base}/scaling_min_freq")).ok()?.trim().parse().ok()?;
-                let max = fs::read_to_string(format!("{base}/scaling_max_freq")).ok()?.trim().parse().ok()?;
-                Some((governor, min, max))
-            })();
-            let Some(original) = original else {
-                warn!("[FAS] Cannot snapshot policy {pid}; leaving it under system control");
-                continue;
-            };
-            let _ = crate::utils::try_write_file(&format!("{base}/scaling_governor"), "performance");
-            mw.write_value_force(max_f);
-            nw.write_value_force(max_f);
+            let Some(mut frequency) = PolicyFrequency::open(policy) else { continue; };
+            frequency.select_governor(fas_rules.governor.as_deref());
+            let available = frequency.available_range();
 
             let profile = auto_w.as_ref()
                 .and_then(|aw| aw.iter().find(|&&(p, _)| p == pid))
@@ -311,18 +266,19 @@ impl FasController {
 
             info!("{}", t_with_args("fas-policy-init", &fluent_args!(
                 "pid" => pid.to_string(),
-                "min" => (freqs.first().unwrap()/1000).to_string(),
-                "max" => (max_f/1000).to_string(),
+                "min" => (available.min / 1000).to_string(),
+                "max" => (available.max / 1000).to_string(),
                 "weight" => format!("{:.2}", profile.capacity_weight)
             )));
 
-            self.policies.push(PolicyController::new(mw, nw, freqs, pid as usize, profile, max_f, original));
+            self.policies.push(PolicyController::new(frequency, profile));
         }
 
         self.current_target_fps = *self.fps_gears.iter().reduce(|a, b| if a > b { a } else { b }).unwrap_or(&60.0);
         self.reset_runtime();
         self.refresh_cached_values();
         self.init_time = Instant::now();
+        self.limits_checked_at = self.init_time;
         self.perf_index = self.cfg.perf_cold_boot;
         self.temp_threshold = fas_rules.core_temp_threshold;
         self.apply_freqs();
@@ -342,14 +298,21 @@ impl FasController {
 
     /// 重置所有 policy 频率（退出游戏时调用）
     pub fn reset_all_freqs(&mut self) {
-        for policy in &mut self.policies {
-            policy.reset();
-        }
+        self.restore.extend(self.policies.drain(..).map(|policy| policy.frequency));
+        self.retry_restore();
         self.saved_perfmgr.retain(|(path, value)| {
             if crate::utils::write_to_file(path, value.trim()).is_err() {
                 warn!("[FAS] Failed to restore {path}");
                 true
             } else { false }
         });
+    }
+
+    pub fn retry_restore(&mut self) {
+        self.restore.retain_mut(|policy| !policy.restore());
+    }
+
+    pub fn restore_pending(&self) -> bool {
+        !self.restore.is_empty()
     }
 }

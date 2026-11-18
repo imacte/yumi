@@ -26,7 +26,7 @@
   * 🔄 **智能动态模式切换** - 根据当前前台应用自动调整性能模式。
   * 🎯 **FAS 帧感知调度** - 内置 PID 控制器 + 帧时间分析引擎，逐帧动态调频，游戏场景下兼顾流畅与功耗。
   * 📊 **eBPF 内核级监控** - 通过 `sched_switch` tracepoint 和 `queueBuffer` uprobe 实现零开销的 CPU 利用率和帧率采集。
-  * ⚡ **CPU 负载调速器 (CLG)** - 基于 eBPF 实时负载数据的自适应调频，替代传统内核调速器，适用于日常非游戏场景。
+  * ⚡ **CPU 负载调速器 (CLG)** - 基于 eBPF 实时负载数据为日常非游戏场景设置各 CPU 簇的频率范围。
   * 🌡️ **温度感知调控** - 实时读取 CPU 温度传感器，超过阈值时自动降频保护。
   * 🌙 **智能息屏节电** - 息屏时自动进入 Doze 模式，强制限制性能上限，极致省电。
   * 🌐 **轻量 WebUI** - 无需安装额外 App，通过浏览器即可管理调度配置。
@@ -97,7 +97,9 @@ yumi 提供五种性能模式：
 
 ### CLG (CPU Load Governor) 说明
 
-在非 FAS 的四种模式下，yumi 使用 **CPU 负载调速器 (CLG)** 替代内核原生调速器。CLG 基于 eBPF 采集的真实 CPU 利用率数据，通过 EMA 平滑、升降频速率限制和 headroom 因子进行自适应调频。每种模式可独立配置 CLG 参数（升降频阈值、平滑系数、性能上下限等）。
+CLG 基于 eBPF 采集的 CPU 利用率，结合 EMA 平滑、升降频速率限制和 headroom 因子计算每个簇的频率上限。CLG 的下限最多比上限低两档，FAS 的下限最多低一档。下限受相应性能地板约束。极速模式的默认地板与上限相同，因此只有最高一档可用。
+
+在 WebUI 的「详细配置」中，可以为每个 CLG 模式和 FAS 分别选择 CPU 调速器。YAML 配置项为 `config.yaml` 中各模式的 `cpu_load_governor.governor` 和 `rules.yaml` 中的 `fas_rules.governor`。默认 `system` 沿用接管前的调速器。设备支持 `schedutil` 时可以用它在区间内随负载调频，`performance` 则会请求区间上限。
 
 息屏时，系统自动进入 **Doze 模式**，CLG 被重新配置为极致省电参数（性能上限锁死 40%、升频极迟钝、瞬间降频），大幅降低待机功耗。
 
@@ -122,7 +124,7 @@ yumi 的核心是由一个 Rust 守护进程 **yumi** 驱动的。它使用 eBPF
   * **eBPF 内核级监控**: 通过 `sched_switch` tracepoint 精确采集每核心 CPU 利用率和线程运行时间；通过 `queueBuffer` uprobe 零开销捕获渲染帧间隔。
   * **实时配置监听**: 支持配置文件（`config.yaml`）和规则文件（`rules.yaml`）热重载，切换模式无需重启。
   * **内置 FAS 引擎**: PID 控制器驱动的帧感知调度，支持自动容量权重探测、per-app 配置、CPU 利用率辅助调频。
-  * **CLG 负载调速器**: 基于 eBPF 实时负载的自适应调频，替代内核原生调速器。
+  * **CLG 负载调速器**: 基于 eBPF 实时负载调整每个 CPU 簇的频率范围。
   * **多语言国际化**: 基于 Fluent 的 i18n 系统，支持中英文日志输出。
 
 #### 功能模块
@@ -133,7 +135,7 @@ yumi 的核心是由一个 Rust 守护进程 **yumi** 驱动的。它使用 eBPF
 | **eBPF FPS 监控** | 通过 `queueBuffer` uprobe 捕获渲染帧提交事件，内核侧 PID 过滤，perf event 零拷贝传输到用户态。 |
 | **FAS 帧感知调度** | PID 控制器驱动，实时分析帧间隔，通过 perf_index (0.0~1.0) 映射到 CPU 频率，逐帧动态调频。 |
 | **CLG 负载调速器** | 基于 eBPF 实时负载数据的自适应调频，支持按 cluster 独立控制，带升降频速率限制。 |
-| **CPU 频率控制** | FastWriter 高性能 sysfs 写入器，带去重、unmount 和频率校验，锁频写入各核心簇。 |
+| **CPU 频率控制** | 按 CPU 簇更新 sysfs 频率上下限，内核调速器在区间内选频。 |
 | **自动容量权重** | 运行时探测各核心簇的 `cpu_capacity`，自动计算 capacity_weight，无需手动配置核心架构。 |
 | **智能息屏节电** | 息屏自动进入 Doze 模式，CLG 强制限制为极致省电配置；亮屏自动恢复。 |
 | **温度感知调控** | 实时监控 CPU 温度，超过阈值时限制 FAS 性能上限。 |
@@ -176,6 +178,7 @@ FAS 的参数通过 `rules.yaml` 中的 `fas_rules` 节进行配置：
 
 ```yaml
 fas_rules:
+  governor: system
   fps_gears: [30.0, 60.0, 90.0, 120.0, 144.0]
   fps_margin: 3.0
 
@@ -221,6 +224,7 @@ fas_rules:
   app_switch_gap_ms: 3000.0
   app_switch_resume_perf: 0.60
   freq_force_reapply_interval: 30
+  verify_freq_interval_secs: 3
   fixed_max_frame_ms: 500.0
   cold_boot_ms: 3500
 
@@ -268,7 +272,8 @@ fas_rules:
 | `damped_perf_cap` | float | 0.92 | 阻尼状态的 perf 上限。 |
 | `app_switch_gap_ms` | float | 3000.0 | 应用切换判定间隔（ms），帧间隔超过此值视为切换。 |
 | `app_switch_resume_perf` | float | 0.60 | 应用切换后的恢复 perf。 |
-| `freq_force_reapply_interval` | int | 30 | 频率强制重新写入的帧间隔数。 |
+| `freq_force_reapply_interval` | int | 30 | 每隔多少帧跳过频率迟滞重新评估区间，0 为禁用。 |
+| `verify_freq_interval_secs` | int | 3 | 检查有效频率范围的间隔（秒），0 为禁用。 |
 | `fixed_max_frame_ms` | float | 500.0 | 帧间隔上限（ms），超过此值的帧忽略。 |
 | `cold_boot_ms` | int | 3500 | 冷启动期（ms），期间使用 perf_cold_boot。 |
 | `per_app_profiles` | map | {} | 每个游戏的独立配置，支持 `target_fps` 和 `fps_margin`。 |
@@ -345,6 +350,7 @@ CpuIdle:
 # 省电模式 — 极致续航
 powersave:
   cpu_load_governor:
+    governor: system
     up_threshold: 0.85
     down_threshold: 0.60
     smoothing_up: 0.40
@@ -365,6 +371,7 @@ powersave:
 # 均衡模式 — 日常使用
 balance:
   cpu_load_governor:
+    governor: system
     up_threshold: 0.80
     down_threshold: 0.50
     smoothing_up: 0.60
@@ -385,6 +392,7 @@ balance:
 # 性能模式 — 优先响应
 performance:
   cpu_load_governor:
+    governor: system
     up_threshold: 0.65
     down_threshold: 0.40
     smoothing_up: 0.80
@@ -405,6 +413,7 @@ performance:
 # 极速模式 — 最大性能释放
 fast:
   cpu_load_governor:
+    governor: system
     up_threshold: 0.01
     down_threshold: 0.01
     smoothing_up: 1.0
@@ -465,7 +474,7 @@ yumi 使用两个 eBPF 探针进行内核级数据采集：
   * **内核侧时间戳采集**: 在 eBPF 中通过 `bpf_ktime_get_ns()` 记录帧提交时间，通过 RingBuf 或兼容后端 PerfEventArray 传输到用户态。CPU、RingBuf FPS、PerfEvent FPS 分别编译，避免 map 加载失败相互影响。
   * **per-PID uprobe 挂载**: 每个目标进程持有独立的 eBPF 实例，PID 切换时自动 detach 旧实例并 attach 新实例，确保只捕获目标进程的帧事件。
   * **用户态帧间隔计算**: 按内核时间戳合并帧事件，每个新帧间隔仅发送一次，过滤异常帧间隔（1ms~200ms）；没有新帧时不重发缓存值。
-  * **监控失效保护**: CLG 收到有效 CPU 样本后才接管频率；FAS 等待有效 CPU 和目标进程帧数据。监控退出或数据超过 2 秒未更新时释放相应控制，并尝试恢复接管前的 governor 和频率范围。切换控制器时立即释放旧控制，避免保留旧锁频状态。
+  * **监控失效保护**: CLG 收到有效 CPU 样本后才接管频率；FAS 等待有效 CPU 和目标进程帧数据。监控退出或数据超过 2 秒未更新时释放相应控制，并尝试恢复接管前的 governor 和频率范围。切换控制器时先恢复旧控制器管理的调速器和频率范围。
 
 -----
 

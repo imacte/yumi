@@ -49,8 +49,54 @@ const showModeSheet = ref(false);
 const showAppModeSheet = ref(false);
 const showLanguageSheet = ref(false);
 const showLoglevelSheet = ref(false);
+const showGovernorSheet = ref(false);
+const governorLoading = ref(false);
+const governorNames = ref<string[]>([]);
+const governorActions = computed(() => [
+  { name: t('governor_system'), governor: 'system' },
+  ...governorNames.value.map(governor => ({ name: governor, governor }))
+]);
 
 const isObj = (v: any) => v && typeof v === 'object' && !Array.isArray(v);
+const isGovernorPath = (path: string) => path === 'fas_rules/governor'
+  || /^(powersave|balance|performance|fast)\/(cpu_load_governor|CpuLoadGovernor)\/governor$/.test(path);
+
+const withGovernor = (config: any) => ({
+  ...config,
+  governor: typeof config?.governor === 'string' ? config.governor.trim() || 'system' : 'system'
+});
+
+const displayedData = computed(() => {
+  const data = { ...currentData.value };
+  if (activeTab.value === 'rules') {
+    data.fas_rules = withGovernor(data.fas_rules);
+  } else {
+    for (const mode of modeActions.value) {
+      const config = data[mode.modeKey];
+      const key = config?.CpuLoadGovernor && !config.cpu_load_governor ? 'CpuLoadGovernor' : 'cpu_load_governor';
+      data[mode.modeKey] = { ...config, [key]: withGovernor(config?.[key]) };
+    }
+  }
+  return data;
+});
+
+const openGovernorSheet = async () => {
+  showGovernorSheet.value = true;
+  governorLoading.value = true;
+  governorNames.value = [];
+  try {
+    const policies = await Bridge.getCpuPolicies();
+    const [first = [], ...otherPolicies] = await Promise.all(
+      policies.map(policy => Bridge.getAvailableGovernors(policy))
+    );
+    governorNames.value = [...new Set(first)]
+      .filter(name => name !== 'system' && /^[a-zA-Z0-9_-]+$/.test(name)
+        && otherPolicies.every(names => names.includes(name)))
+      .sort();
+  } finally {
+    governorLoading.value = false;
+  }
+};
 
 const collectExpandPaths = (obj: any, basePath: string): string[] => {
   const result: string[] = [];
@@ -74,7 +120,7 @@ const loadData = async () => {
     currentData.value = activeTab.value === 'rules'
       ? await Bridge.getRulesConfig()
       : await Bridge.getMainConfig();
-    activeNames.value = collectExpandPaths(currentData.value, '');
+    activeNames.value = collectExpandPaths(displayedData.value, '');
   } catch (e) {
     // 3. 替换为原生 toast
     toast(t('load_failed'));
@@ -117,6 +163,7 @@ const handleItemClick = (fullPath: string, value: any) => {
   if (fullPath.startsWith('app_modes/')) { showAppModeSheet.value = true; return; }
   if (fullPath === 'meta/language') { showLanguageSheet.value = true; return; }
   if (fullPath === 'meta/loglevel') { showLoglevelSheet.value = true; return; }
+  if (isGovernorPath(fullPath)) { void openGovernorSheet(); return; }
 
   const isArrayField = Array.isArray(value) || fullPath === 'ignored_apps' || fullPath.endsWith('fps_gears') || fullPath.endsWith('target_fps') || fullPath.endsWith('cluster_profiles');
 
@@ -168,6 +215,11 @@ const onSelectAppMode = (a: any) => {
 };
 const onSelectLanguage = (a: any) => { setDeepValue(currentData.value, 'meta/language', a.langCode); saveConfig(); showLanguageSheet.value = false; };
 const onSelectLoglevel = (a: any) => { setDeepValue(currentData.value, 'meta/loglevel', a.level); saveConfig(); showLoglevelSheet.value = false; };
+const onSelectGovernor = (action: { governor: string }) => {
+  setDeepValue(currentData.value, editingKeyPath.value, action.governor);
+  showGovernorSheet.value = false;
+  saveConfig();
+};
 
 const RecursiveItem = defineComponent({
   name: 'RecursiveItem',
@@ -215,14 +267,18 @@ const RecursiveItem = defineComponent({
         return h(CollapseItem, collapseProps, slots);
       }
 
+      const governor = isGovernorPath(props.path);
       return h(Cell, {
-        title: props.name,
+        title: governor ? t('cpu_governor') : props.name,
         center: true,
         isLink: typeof props.value !== 'boolean',
         onClick: () => handleItemClick(props.path, props.value)
       }, {
         value: () => {
           if (typeof props.value === 'boolean') return null;
+          if (governor && props.value === 'system') {
+            return h('span', t('governor_system'));
+          }
           let displayVal = '';
           if (Array.isArray(props.value)) {
             if (props.path.endsWith('cluster_profiles')) {
@@ -266,7 +322,7 @@ const RecursiveItem = defineComponent({
 
     <div v-else class="config-content">
       <van-collapse v-model="activeNames" :border="false">
-        <RecursiveItem v-for="(val, key) in currentData" :key="key" :name="String(key)" :value="val" :path="String(key)" />
+        <RecursiveItem v-for="(val, key) in displayedData" :key="key" :name="String(key)" :value="val" :path="String(key)" />
       </van-collapse>
       <div style="height: 60px;"></div>
     </div>
@@ -282,6 +338,8 @@ const RecursiveItem = defineComponent({
     <van-action-sheet v-model:show="showAppModeSheet" :actions="appModeActions" :cancel-text="t('cancel')" @select="onSelectAppMode" />
     <van-action-sheet v-model:show="showLanguageSheet" :actions="languageActions" :cancel-text="t('cancel')" @select="onSelectLanguage" />
     <van-action-sheet v-model:show="showLoglevelSheet" :actions="loglevelActions" :cancel-text="t('cancel')" @select="onSelectLoglevel" />
+    <van-action-sheet v-model:show="showGovernorSheet" :actions="governorActions" :title="t('cpu_governor')"
+      :description="governorLoading ? t('loading') : undefined" :cancel-text="t('cancel')" @select="onSelectGovernor" />
   </div>
 </template>
 

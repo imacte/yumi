@@ -83,7 +83,7 @@ export const MockBridge = {
     await delay(300);
     return `[2026-02-23 02:31:07] [INFO] [yumi] daemon is running smoothly.\n[2026-02-23 02:48:18] [INFO] [Scheduler] Active mode: ${simulatedModeTxt}`;
   },
-  async getCpuPolicies(): Promise<number[]> { return []; },
+  async getCpuPolicies(): Promise<number[]> { return [0, 4]; },
   async getAvailableFreqs(policyNum: number): Promise<string[]> { return []; },
-  async getAvailableGovernors(policyNum: number): Promise<string[]> { return []; }
+  async getAvailableGovernors(_policyNum: number): Promise<string[]> { return ['schedutil', 'performance', 'powersave']; }
 };

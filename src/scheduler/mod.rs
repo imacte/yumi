@@ -16,8 +16,9 @@
  */
 
 use std::sync::{Arc, Mutex, RwLock, mpsc};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::fs;
 use anyhow::Result;
 
@@ -25,6 +26,7 @@ pub mod config;
 pub mod scheduler;
 pub mod fas;
 pub mod cpu_load_governor;
+mod cpufreq;
 mod monitor_health;
 
 use crate::i18n::{t, load_language, t_with_args};
@@ -113,12 +115,14 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
     let shared_config = Arc::new(RwLock::new(config));
     let shared_mode_name = Arc::new(Mutex::new("balance".to_string())); 
     let sys_path_exist = Arc::new(utils::SysPathExist::new());
+    let clg_config_changed = Arc::new(AtomicBool::new(false));
 
     // ==========================================
     // Config Watcher 线程
     // ==========================================
     let config_clone = shared_config.clone();
     let sys_path_clone = sys_path_exist.clone();
+    let config_changed = clg_config_changed.clone();
     
     thread::Builder::new()
         .name("config_watcher".to_string())
@@ -138,6 +142,7 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
                     Ok(new_config) => {
                         logger::update_level(&new_config.meta.loglevel);
                         *config_clone.write().unwrap() = new_config;
+                        config_changed.store(true, Ordering::Relaxed);
                         
                         let new_lang = config_clone.read().unwrap().meta.language.clone();
                         if old_lang != new_lang { load_language(&new_lang); }
@@ -181,6 +186,7 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
             let mut fps_health = monitor_health::MonitorHealth::default();
             let mut game: Option<(i32, String, f64)> = None;
             let mut clg_dirty = true;
+            let mut next_restore = Instant::now();
             let temp_sensor_path = crate::utils::find_cpu_temp_path().unwrap_or_default();
             let mut last_temp_update = Instant::now();
 
@@ -202,14 +208,18 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     };
                     let now = Instant::now();
+                    if now >= next_restore {
+                        cpu_governor.retry_restore();
+                        fas_controller.retry_restore();
+                        next_restore = now + Duration::from_secs(1);
+                    }
                     if !cpu_health.ready(now) && cpu_governor.is_active() {
                         log::warn!("[Scheduler] CPU samples unavailable; restoring CPU policies");
                         cpu_governor.release();
                     }
-                    if (!cpu_health.ready(now) || !fps_health.ready(now)) && !fas_controller.policies.is_empty() {
+                    if (!cpu_health.ready(now) || !fps_health.ready(now)) && fas_controller.is_active() {
                         log::warn!("[Scheduler] Monitor samples unavailable; releasing FAS policies");
                         fas_controller.reset_all_freqs();
-                        fas_controller.policies.clear();
                         fas_controller.clear_game();
                     }
 
@@ -222,7 +232,6 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
                                 // Release the previous owner before taking the
                                 // next snapshot, including FAS -> Doze transitions.
                                 fas_controller.reset_all_freqs();
-                                fas_controller.policies.clear();
                                 fas_controller.clear_game();
                                 log::info!("{}", t(if screen_on { "scheduler-doze-restore" } else { "scheduler-doze-enable" }));
                             }
@@ -234,10 +243,9 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
                                     log::info!("{}", t_with_args("scheduler-mode-change-request", &fluent_args!(
                                         "old" => old_mode, "new" => mode.as_str(), "pkg" => package_name.as_str(), "temp" => temperature
                                     )));
-                                    // Never retain old FAS locks while CLG takes a
+                                    // Release old FAS limits before CLG takes a
                                     // snapshot: release both owners at a handover.
                                     fas_controller.reset_all_freqs();
-                                    fas_controller.policies.clear();
                                     fas_controller.clear_game();
                                     if mode == "fas" && is_screen_on { cpu_governor.release(); }
                                     fps_health.invalidate();
@@ -264,12 +272,16 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
                                 {
                                     if let Some((game_pid, package, temperature)) = &game {
                                         if *game_pid > 0 && pid == *game_pid as u32 && fps_health.observe(sampled_at, now) {
-                                            if fas_controller.policies.is_empty() {
-                                                cpu_governor.release();
+                                            if !fas_controller.is_active()
+                                                && !cpu_governor.restore_pending()
+                                                && !fas_controller.restore_pending()
+                                            {
                                                 fas_controller.load_policies(&current_rules.fas_rules);
-                                                fas_controller.set_game(*game_pid, package);
-                                                fas_controller.set_temperature(*temperature);
-                                                fas_controller.set_temp_threshold(current_rules.fas_rules.core_temp_threshold);
+                                                if fas_controller.is_active() {
+                                                    fas_controller.set_game(*game_pid, package);
+                                                    fas_controller.set_temperature(*temperature);
+                                                    fas_controller.set_temp_threshold(current_rules.fas_rules.core_temp_threshold);
+                                                }
                                             }
                                             if !temp_sensor_path.is_empty() && last_temp_update.elapsed().as_secs() >= 3 {
                                                 if let Ok(raw_temp) = crate::utils::read_f64_from_file(&temp_sensor_path) {
@@ -287,7 +299,7 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
                             DaemonEvent::ConfigReload(new_rules) => {
                                 current_rules = new_rules;
                                 clg_dirty = true;
-                                if !fas_controller.policies.is_empty() {
+                                if fas_controller.is_active() {
                                     fas_controller.reload_rules(&current_rules.fas_rules);
                                 }
                             }
@@ -296,11 +308,14 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
 
                     // Every CLG entry point (startup/mode/wake/Doze/reload/recovery)
                     // passes through this single readiness gate.
+                    clg_dirty |= clg_config_changed.swap(false, Ordering::Relaxed);
                     let current_mode = mode_clone.lock().unwrap().clone();
                     if cpu_health.ready(now) && (!is_screen_on || current_mode != "fas") {
-                        if clg_dirty || !cpu_governor.is_active() {
-                            let config_lock = config_clone.read().unwrap();
-                            let mut cfg = get_clg_cfg(&config_lock, if is_screen_on { &current_mode } else { "powersave" });
+                        if (clg_dirty || !cpu_governor.is_active())
+                            && !fas_controller.restore_pending() && !cpu_governor.restore_pending()
+                        {
+                            let mode = if is_screen_on { &current_mode } else { "powersave" };
+                            let mut cfg = get_clg_cfg(&config_clone.read().unwrap(), mode);
                             if !is_screen_on {
                                 cfg.enabled = true;
                                 cfg.perf_floor = 0.0;
@@ -316,9 +331,8 @@ pub fn start_scheduler_thread(rx: mpsc::Receiver<DaemonEvent>) -> Result<()> {
                     } else if cpu_governor.is_active() {
                         cpu_governor.release();
                     }
-                    if (!cpu_health.ready(now) || !fps_health.ready(now)) && !fas_controller.policies.is_empty() {
+                    if (!cpu_health.ready(now) || !fps_health.ready(now)) && fas_controller.is_active() {
                         fas_controller.reset_all_freqs();
-                        fas_controller.policies.clear();
                         fas_controller.clear_game();
                     }
                     clg_dirty = false;

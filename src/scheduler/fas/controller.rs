@@ -16,6 +16,7 @@
  */
 
 use crate::fas_types::{FasRulesConfig, PerAppProfile};
+use crate::scheduler::cpufreq::PolicyFrequency;
 use std::time::Instant;
 use log::{info, warn};
 
@@ -44,7 +45,8 @@ pub struct FasController {
     pub(super) perf_index: f32,
     pub(super) ema_actual_ms: f32,
 
-    pub policies: Vec<PolicyController>,
+    pub(super) policies: Vec<PolicyController>,
+    pub(super) restore: Vec<PolicyFrequency>,
     pub(super) saved_perfmgr: Vec<(String, String)>,
 
     pub(super) fps_window: FpsWindow,
@@ -80,6 +82,7 @@ pub struct FasController {
     // 时间
     pub(super) init_time: Instant,
     pub(super) freq_force_counter: u32,
+    pub(super) limits_checked_at: Instant,
 
     // 缓存
     pub(super) cached_norm: f32,
@@ -119,6 +122,10 @@ pub struct FasController {
 }
 
 impl FasController {
+    pub fn is_active(&self) -> bool {
+        !self.policies.is_empty()
+    }
+
     pub fn new() -> Self {
         let cfg = FasRulesConfig::default();
         let pid_ctrl = PidController::new(cfg.pid.kp, cfg.pid.ki, cfg.pid.kd);
@@ -130,6 +137,7 @@ impl FasController {
             current_target_fps: 60.0,
             ema_actual_ms: 0.0,
             policies: Vec::new(),
+            restore: Vec::new(),
             saved_perfmgr: Vec::new(),
             fps_window: FpsWindow::new(),
             log_counter: 0,
@@ -154,6 +162,7 @@ impl FasController {
             jank_streak: 0,
             init_time: Instant::now(),
             freq_force_counter: 0,
+            limits_checked_at: Instant::now(),
             cached_norm: 1.0,
             cached_budget_ms: 16.67,
             cached_ema_budget: 17.54,

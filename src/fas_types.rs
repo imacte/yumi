@@ -102,6 +102,8 @@ pub struct PerAppProfile {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FasRulesConfig {
+    #[serde(default)]
+    pub governor: Option<String>,
     #[serde(default = "default_fps_gears")]       pub fps_gears: Vec<f32>,
     #[serde(default = "default_fps_margin")]       pub fps_margin: f32,
     #[serde(default)]                              pub pid: PidCoefficients,
@@ -295,6 +297,7 @@ impl FasRulesConfig {
 impl Default for FasRulesConfig {
     fn default() -> Self {
         Self {
+            governor: None,
             fps_gears: default_fps_gears(), fps_margin: default_fps_margin(),
             pid: PidCoefficients::default(),
             cluster_profiles: default_cluster_profiles(),

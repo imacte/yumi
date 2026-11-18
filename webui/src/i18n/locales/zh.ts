@@ -58,6 +58,8 @@ export default {
   lang_zh: '中文',
   lang_en_short: 'EN',
   lang_zh_short: '中',
+  cpu_governor: 'CPU 调速器',
+  governor_system: '沿用系统',
   add_governor: '添加调速器',
   add_path: '添加 path',
   add_governor_hint: '将在 pGovPath 下新建一个调速器节点',

@@ -58,6 +58,8 @@ export default {
   lang_zh: 'Chinese',
   lang_en_short: 'EN',
   lang_zh_short: '中',
+  cpu_governor: 'CPU governor',
+  governor_system: 'Use system governor',
   add_governor: 'Add Governor',
   add_path: 'Add Path',
   add_governor_hint: 'Creates a new governor node under pGovPath',

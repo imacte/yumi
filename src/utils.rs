@@ -169,7 +169,7 @@ impl SysPathExist {
 }
 
 // ════════════════════════════════════════════════════════════════
-//  FastWriter — 带去重 + unmount 的 sysfs 写入器
+//  FastWriter — sysfs 写入器
 // ════════════════════════════════════════════════════════════════
 
 pub struct FastWriter {
@@ -203,8 +203,6 @@ impl FastWriter {
             }
         }
     }
-
-    pub fn re_unmount(&self) { Self::try_unmount(&self.path); }
 
     pub fn write_value_force(&mut self, value: u32) -> bool {
         self.do_write(value)

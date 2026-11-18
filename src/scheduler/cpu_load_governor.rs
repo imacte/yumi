@@ -17,41 +17,18 @@
 
 
 use crate::scheduler::config::CpuLoadGovernorConfig;
-use crate::utils::FastWriter;
+use super::cpufreq::{FrequencyRange, PolicyFrequency};
 use log::{info, debug, warn};
 use std::fs;
 
 use crate::i18n::{t, t_with_args};
 use crate::fluent_args;
 
-// ════════════════════════════════════════════════════════════════
-//  PolicyRestore — CLG 接管前的系统状态快照，release 时恢复
-// ════════════════════════════════════════════════════════════════
-
-struct PolicyRestore {
-    policy_id: i32,
-    /// 读取失败时为 None，恢复时跳过该字段，不写退化值
-    governor: Option<String>,
-    min_freq: Option<u32>,
-    max_freq: Option<u32>,
-    /// 该 policy 的硬件最大可用频率，恢复时先放宽上限到它
-    hw_max: u32,
-}
-
-// ════════════════════════════════════════════════════════════════
-//  ClusterState — 单 cluster 运行时状态
-// ════════════════════════════════════════════════════════════════
-
 struct ClusterState {
-    policy_id: i32,
+    frequency: PolicyFrequency,
     affected_cpus: Vec<usize>,
-    available_freqs: Vec<u32>,
-    cached_ratios: Vec<f32>,
     boost_max: u32,
-    max_writer: FastWriter,
-    min_writer: FastWriter,
     current_perf: f32,
-    current_freq: u32,
     down_wait: u32,
     up_wait: u32,
     /// 上一 tick 的原始 max_util，用于尖峰跳升检测
@@ -59,38 +36,10 @@ struct ClusterState {
 }
 
 impl ClusterState {
-    fn find_nearest_freq(&self, target_ratio: f32) -> u32 {
-        let idx = self.cached_ratios.partition_point(|&r| r < target_ratio);
-        if idx == 0 {
-            self.available_freqs[0]
-        } else if idx >= self.available_freqs.len() {
-            *self.available_freqs.last().unwrap()
-        } else {
-            let lo = idx - 1;
-            let hi = idx;
-            if (self.cached_ratios[hi] - target_ratio).abs()
-                < (self.cached_ratios[lo] - target_ratio).abs()
-            { self.available_freqs[hi] } else { self.available_freqs[lo] }
-        }
-    }
-
-    fn write_freq(&mut self, freq: u32) {
-        if freq == self.current_freq { return; }
-        let ok = if freq >= self.current_freq {
-            // 升频：先拉高 max 再拉高 min
-            let ok_max = self.max_writer.write_value_force(freq);
-            let ok_min = self.min_writer.write_value_force(freq);
-            ok_max && ok_min
-        } else {
-            // 降频：先降 min 再降 max
-            let ok_min = self.min_writer.write_value_force(freq);
-            let ok_max = self.max_writer.write_value_force(freq);
-            ok_max && ok_min
-        };
-        // 仅在两端均写入成功时更新缓存，失败则下次 tick 自动重试
-        if ok {
-            self.current_freq = freq;
-        }
+    fn apply_range(&mut self, floor: f32) -> FrequencyRange {
+        let range = self.frequency.range_for_perf(self.current_perf, floor, 2);
+        self.frequency.apply(range);
+        range
     }
 
     fn max_util(&self, core_utils: &[f32]) -> f32 {
@@ -107,8 +56,7 @@ impl ClusterState {
 
 pub struct CpuLoadGovernor {
     clusters: Vec<ClusterState>,
-    /// CLG 接管前的系统状态，release 时恢复（首次 init 时捕获）
-    restore: Vec<PolicyRestore>,
+    restore: Vec<PolicyFrequency>,
     cfg: CpuLoadGovernorConfig,
     active: bool,
     log_counter: u32,
@@ -131,116 +79,37 @@ impl CpuLoadGovernor {
 
     pub fn init_policies(&mut self, gov_cfg: &CpuLoadGovernorConfig) {
         self.release();
+        if !self.restore.is_empty() { return; }
         self.cfg = gov_cfg.clone();
         self.normalize_cfg();
 
-        let clusters = crate::scheduler::get_cpu_policies();
-
-        for policy in &clusters {
+        for policy in &crate::scheduler::get_cpu_policies() {
             let pid = policy.id;
-            let gov_path = format!(
-                "/sys/devices/system/cpu/cpufreq/policy{}/scaling_governor", pid);
-            let min_path = format!(
-                "/sys/devices/system/cpu/cpufreq/policy{}/scaling_min_freq", pid);
-            let max_path = format!(
-                "/sys/devices/system/cpu/cpufreq/policy{}/scaling_max_freq", pid);
-
-            let freq_path = format!(
-                "/sys/devices/system/cpu/cpufreq/policy{}/scaling_available_frequencies", pid);
-            let mut freqs: Vec<u32> = fs::read_to_string(&freq_path)
-                .unwrap_or_default()
-                .split_whitespace()
-                .filter_map(|s| s.parse().ok())
-                .collect();
-            if freqs.is_empty() { continue; }
-            freqs.sort_unstable();
-            freqs.dedup();
-
-            // 合并 boost 频率（部分平台额外暴露的高频点），去重排序
-            if !policy.boost_frequencies.is_empty() {
-                freqs.extend(&policy.boost_frequencies);
-                freqs.sort_unstable();
-                freqs.dedup();
-            }
-
-            let affected = Self::read_affected_cpus(pid);
-            if affected.is_empty() { continue; }
-
-            let fmin = *freqs.first().unwrap() as f32;
-            let fmax = *freqs.last().unwrap() as f32;
-            let range = (fmax - fmin).max(1.0);
-            let cached_ratios: Vec<f32> = freqs.iter()
-                .map(|&f| (f as f32 - fmin) / range)
-                .collect();
-
-            let max_writer = FastWriter::new(format!(
-                "/sys/devices/system/cpu/cpufreq/policy{}/scaling_max_freq", pid));
-            let min_writer = FastWriter::new(format!(
-                "/sys/devices/system/cpu/cpufreq/policy{}/scaling_min_freq", pid));
-
-            if !max_writer.is_valid() || !min_writer.is_valid() {
-                warn!("{}", t_with_args("clg-writer-invalid", &fluent_args!(
-                    "pid" => pid.to_string(),
-                    "max_valid" => max_writer.is_valid().to_string(),
-                    "min_valid" => min_writer.is_valid().to_string()
-                )));
-                continue;
-            }
-
-            // 记录系统原始状态（每个将被接管的 policy 单独记录），release 时恢复。
-            // 必须位于 governor 写入之前，确保 release 能还原所有被接管的 cluster。
-            // 读取失败记录为 None：恢复时跳过对应字段，避免写退化值（如 0）。
-            let governor = fs::read_to_string(&gov_path).ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty());
-            let min_freq = fs::read_to_string(&min_path).ok()
-                .and_then(|s| s.trim().parse::<u32>().ok());
-            let max_freq = fs::read_to_string(&max_path).ok()
-                .and_then(|s| s.trim().parse::<u32>().ok());
-            // 同 policy 只保留最新快照（覆盖上次恢复失败遗留的旧记录）
-            self.restore.retain(|r| r.policy_id != pid);
-            self.restore.push(PolicyRestore {
-                policy_id: pid,
-                governor,
-                min_freq,
-                max_freq,
-                hw_max: *freqs.last().unwrap(),
-            });
-
-            let _ = crate::utils::try_write_file(&gov_path, "performance");
+            let affected_cpus = Self::read_affected_cpus(pid);
+            if affected_cpus.is_empty() { continue; }
+            let Some(mut frequency) = PolicyFrequency::open(policy) else { continue; };
+            frequency.select_governor(self.cfg.governor.as_deref());
+            let available = frequency.available_range();
 
             let init_perf = self.cfg.perf_init.clamp(self.cfg.perf_floor, self.cfg.perf_ceil);
-            let boost_max = policy.boost_frequencies.iter().copied().max().unwrap_or(0);
             let mut cluster = ClusterState {
-                policy_id: pid,
-                affected_cpus: affected.clone(),
-                available_freqs: freqs,
-                cached_ratios,
-                boost_max,
-                max_writer,
-                min_writer,
+                frequency,
+                affected_cpus,
+                boost_max: policy.boost_frequencies.iter().copied().max().unwrap_or(0),
                 current_perf: init_perf,
-                current_freq: 0,
                 down_wait: 0,
                 up_wait: 0,
                 last_util: 0.0,
             };
-
-            let init_freq = cluster.find_nearest_freq(init_perf);
-            let init_ok = cluster.max_writer.write_value_force(init_freq)
-                && cluster.min_writer.write_value_force(init_freq);
-            // 仅两端均写入成功才缓存频率；失败保持 0，下次 tick write_freq 自动重试
-            if init_ok {
-                cluster.current_freq = init_freq;
-            }
+            let range = cluster.apply_range(self.cfg.perf_floor);
 
             info!("{}", t_with_args("clg-init", &fluent_args!(
                 "pid" => pid.to_string(),
-                "cpus" => format!("{:?}", affected),
-                "fmin" => (fmin / 1000.0).to_string(),
-                "fmax" => (fmax / 1000.0).to_string(),
+                "cpus" => format!("{:?}", cluster.affected_cpus),
+                "fmin" => (available.min / 1000).to_string(),
+                "fmax" => (available.max / 1000).to_string(),
                 "perf" => format!("{:.2}", init_perf),
-                "freq" => init_freq.to_string()
+                "freq" => format!("{}-{}", range.min, range.max)
             )));
 
             self.clusters.push(cluster);
@@ -256,17 +125,31 @@ impl CpuLoadGovernor {
 
     pub fn release(&mut self) {
         if self.active { info!("{}", t("clg-deactivated")); }
-        // 恢复系统原始状态，避免 release 后 CPU 悬停在 CLG 最后写入的值上。
-        // 恢复失败的条目保留，下次 release/init 时重试，避免静默漂移。
-        self.restore.retain(|r| !Self::restore_policy(r));
-        self.clusters.clear();
+        self.restore.extend(self.clusters.drain(..).map(|cluster| cluster.frequency));
+        self.retry_restore();
         self.active = false;
         self.log_counter = 0;
     }
 
+    pub fn retry_restore(&mut self) {
+        self.restore.retain_mut(|policy| !policy.restore());
+    }
+
+    pub fn restore_pending(&self) -> bool {
+        !self.restore.is_empty()
+    }
+
     pub fn reload_config(&mut self, gov_cfg: &CpuLoadGovernorConfig) {
+        let governor_changed = self.cfg.governor != gov_cfg.governor;
         self.cfg = gov_cfg.clone();
         self.normalize_cfg();
+        for cluster in &mut self.clusters {
+            if governor_changed {
+                cluster.frequency.select_governor(self.cfg.governor.as_deref());
+            }
+            cluster.current_perf = cluster.current_perf.clamp(self.cfg.perf_floor, self.cfg.perf_ceil);
+            cluster.apply_range(self.cfg.perf_floor);
+        }
         debug!("{}", t_with_args("clg-config-reloaded", &fluent_args!(
             "up" => format!("{:.2}", self.cfg.up_threshold),
             "down" => format!("{:.2}", self.cfg.down_threshold),
@@ -286,49 +169,6 @@ impl CpuLoadGovernor {
             )));
         }
         self.cfg.normalize();
-    }
-
-    /// 将单个 policy 恢复为接管前的原始状态。
-    /// 返回是否全部写入成功：失败时返回 false，调用方保留快照以便重试。
-    fn restore_policy(r: &PolicyRestore) -> bool {
-        let gov_path = format!(
-            "/sys/devices/system/cpu/cpufreq/policy{}/scaling_governor", r.policy_id);
-        let min_path = format!(
-            "/sys/devices/system/cpu/cpufreq/policy{}/scaling_min_freq", r.policy_id);
-        let max_path = format!(
-            "/sys/devices/system/cpu/cpufreq/policy{}/scaling_max_freq", r.policy_id);
-
-        let mut all_ok = true;
-        // 写序保证任意中间状态均满足 min <= max：
-        // 1) 恢复 governor（读取失败为 None 时跳过，保持现状）；
-        // 2) 上限先放宽到硬件最大值（恒 >= 当前下限）；
-        // 3) 恢复下限；4) 恢复上限。各步失败均记录，由调用方决定重试。
-        if let Some(gov) = &r.governor {
-            if crate::utils::write_to_file(&gov_path, gov.as_bytes()).is_err() {
-                all_ok = false;
-            }
-        }
-        if crate::utils::write_to_file(&max_path, r.hw_max.to_string()).is_err() {
-            all_ok = false;
-        }
-        if let Some(min) = r.min_freq {
-            if crate::utils::write_to_file(&min_path, min.to_string()).is_err() {
-                all_ok = false;
-            }
-        }
-        if let Some(max) = r.max_freq {
-            if crate::utils::write_to_file(&max_path, max.to_string()).is_err() {
-                all_ok = false;
-            }
-        }
-
-        debug!("{}", t_with_args("clg-restore", &fluent_args!(
-            "pid" => r.policy_id.to_string(),
-            "governor" => r.governor.clone().unwrap_or_else(|| "<unread>".to_string()),
-            "min" => r.min_freq.map(|v| v.to_string()).unwrap_or_else(|| "<unread>".to_string()),
-            "max" => r.max_freq.map(|v| v.to_string()).unwrap_or_else(|| "<unread>".to_string())
-        )));
-        all_ok
     }
 
     pub fn on_load_update(&mut self, core_utils: &[f32]) {
@@ -367,6 +207,7 @@ impl CpuLoadGovernor {
 
                 // 升频速率限制：必须连续 up_rate_limit_ticks 才执行
                 if cluster.up_wait < self.cfg.up_rate_limit_ticks {
+                    cluster.apply_range(self.cfg.perf_floor);
                     continue;
                 }
 
@@ -409,18 +250,18 @@ impl CpuLoadGovernor {
             }
 
             cluster.current_perf = cluster.current_perf.clamp(self.cfg.perf_floor, self.cfg.perf_ceil);
-            let target_freq = cluster.find_nearest_freq(cluster.current_perf);
-            cluster.write_freq(target_freq);
+            cluster.apply_range(self.cfg.perf_floor);
         }
 
         self.log_counter += 1;
         if self.log_counter % 25 == 0 {
             for c in &self.clusters {
+                let range = c.frequency.applied_range();
                 debug!("{}", t_with_args("clg-tick-log", &fluent_args!(
-                    "pid" => c.policy_id.to_string(),
+                    "pid" => c.frequency.id.to_string(),
                     "util" => format!("{:.0}", c.max_util(core_utils) * 100.0),
                     "perf" => format!("{:.2}", c.current_perf),
-                    "freq" => c.current_freq.to_string(),
+                    "freq" => format!("{}-{}", range.min, range.max),
                     "boost" => c.boost_max.to_string()
                 )));
             }

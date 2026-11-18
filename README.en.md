@@ -26,7 +26,7 @@
   * 🔄 **Smart Dynamic Mode Switching** — Automatically adjusts performance modes based on the current foreground application.
   * 🎯 **FAS Frame-Aware Scheduling** — Built-in PID controller + frame time analysis engine for per-frame dynamic frequency scaling, balancing smoothness and power in gaming scenarios.
   * 📊 **eBPF Kernel-Level Monitoring** — Zero-overhead CPU utilization and frame rate collection via `sched_switch` tracepoint and `queueBuffer` uprobe.
-  * ⚡ **CPU Load Governor (CLG)** — Adaptive frequency scaling based on real-time eBPF load data, replacing traditional kernel governors for everyday non-gaming scenarios.
+  * ⚡ **CPU Load Governor (CLG)** — Per-cluster CPU frequency ranges based on real-time eBPF load data for everyday non-gaming use.
   * 🌡️ **Temperature-Aware Throttling** — Reads CPU temperature sensors in real time, automatically throttling when thresholds are exceeded.
   * 🌙 **Smart Screen-Off Power Saving** — Automatically enters Doze mode when the screen is off, enforcing a low performance ceiling for maximum power savings.
   * 🌐 **Lightweight WebUI** — No extra app required; manage all scheduling settings directly from your browser.
@@ -97,7 +97,9 @@ yumi offers five performance modes:
 
 ### CLG (CPU Load Governor) Overview
 
-In the four non-FAS modes, yumi uses the **CPU Load Governor (CLG)** to replace the kernel's native governor. CLG performs adaptive frequency scaling based on real CPU utilization data collected via eBPF, using EMA smoothing, up/down rate limiting, and a headroom factor. Each mode can independently configure CLG parameters (up/down thresholds, smoothing coefficients, performance floor/ceiling, etc.).
+CLG uses CPU utilization from eBPF, EMA smoothing, rate limits, and a headroom factor to set a frequency ceiling for each cluster. CLG allows up to two frequency steps below the ceiling, and FAS allows one. The applicable performance floor bounds the lower limit. By default, Fast mode sets its floor equal to its ceiling, allowing only the top frequency step.
+
+In the WebUI's Detailed Config view, each CLG mode and FAS can select a CPU governor. The YAML keys are each mode's `cpu_load_governor.governor` in `config.yaml` and `fas_rules.governor` in `rules.yaml`. The default, `system`, uses the governor active before Yumi took control. A supported `schedutil` governor selects frequencies within the range based on load. The `performance` governor requests the top of the range.
 
 When the screen is off, the system automatically enters **Doze mode**, where CLG is reconfigured with extreme power-saving parameters (performance ceiling locked to 40%, extremely sluggish frequency ramp-up, instant ramp-down), dramatically reducing standby power consumption.
 
@@ -122,7 +124,7 @@ The core of yumi is driven by a Rust daemon, **yumi**. It uses eBPF kernel probe
   * **eBPF Kernel-Level Monitoring**: Precisely collects per-core CPU utilization and thread runtime via `sched_switch` tracepoint; captures rendering frame intervals with zero overhead via `queueBuffer` uprobe.
   * **Real-time Configuration Monitoring**: Supports hot-reloading for `config.yaml` and `rules.yaml`, allowing mode switches without a reboot.
   * **Built-in FAS Engine**: PID controller-driven frame-aware scheduling with automatic capacity weight detection, per-app configuration, and CPU utilization-assisted frequency scaling.
-  * **CLG Load Governor**: Adaptive frequency scaling based on real-time eBPF load data, replacing the kernel's native governor.
+  * **CLG Load Governor**: Per-cluster CPU frequency ranges based on real-time eBPF load data.
   * **Multi-Language Internationalization**: Fluent-based i18n system supporting Chinese and English log output.
 
 #### Feature Modules
@@ -133,7 +135,7 @@ The core of yumi is driven by a Rust daemon, **yumi**. It uses eBPF kernel probe
 | **eBPF FPS Monitor** | Captures frame submission events via `queueBuffer` uprobe, with kernel-side PID filtering and zero-copy perf event transport to userspace. |
 | **FAS Frame-Aware Scheduling** | PID controller-driven; analyzes frame intervals in real time and maps them to CPU frequency via perf_index (0.0–1.0) for per-frame dynamic frequency scaling. |
 | **CLG Load Governor** | Adaptive frequency scaling based on real-time eBPF load data, with independent per-cluster control and up/down rate limiting. |
-| **CPU Frequency Control** | FastWriter high-performance sysfs writer with deduplication, unmount, and frequency verification; locked-frequency writes to each core cluster. |
+| **CPU Frequency Control** | Per-cluster sysfs frequency limits with in-range frequency selection by the kernel governor. |
 | **Auto Capacity Weight** | Runtime detection of each core cluster's `cpu_capacity` to automatically compute capacity_weight — no manual core architecture configuration needed. |
 | **Smart Screen-Off Power Saving** | Auto-enters Doze mode when screen is off with CLG forced into extreme power-saving configuration; auto-restores on screen on. |
 | **Temperature-Aware Throttling** | Real-time CPU temperature monitoring; limits FAS performance ceiling when threshold is exceeded. |
@@ -176,6 +178,7 @@ FAS parameters are configured in the `fas_rules` section of `rules.yaml`:
 
 ```yaml
 fas_rules:
+  governor: system
   fps_gears: [30.0, 60.0, 90.0, 120.0, 144.0]
   fps_margin: 3.0
 
@@ -221,6 +224,7 @@ fas_rules:
   app_switch_gap_ms: 3000.0
   app_switch_resume_perf: 0.60
   freq_force_reapply_interval: 30
+  verify_freq_interval_secs: 3
   fixed_max_frame_ms: 500.0
   cold_boot_ms: 3500
 
@@ -268,7 +272,8 @@ fas_rules:
 | `damped_perf_cap` | float | 0.92 | Perf ceiling in damped state. |
 | `app_switch_gap_ms` | float | 3000.0 | App switch detection interval (ms). Frame gaps exceeding this are treated as app switches. |
 | `app_switch_resume_perf` | float | 0.60 | Recovery perf after an app switch. |
-| `freq_force_reapply_interval` | int | 30 | Frequency force-reapply interval in frames. |
+| `freq_force_reapply_interval` | int | 30 | Interval in frames for reevaluating the range without hysteresis. Set to 0 to disable. |
+| `verify_freq_interval_secs` | int | 3 | Effective frequency range check interval in seconds. Set to 0 to disable. |
 | `fixed_max_frame_ms` | float | 500.0 | Maximum frame interval (ms). Frames exceeding this are ignored. |
 | `cold_boot_ms` | int | 3500 | Cold boot duration (ms). Uses perf_cold_boot during this period. |
 | `per_app_profiles` | map | {} | Per-game configuration, supporting `target_fps` and `fps_margin`. |
@@ -345,6 +350,7 @@ Each performance mode can independently configure CPU Load Governor (CLG) parame
 # Powersave — maximize battery life
 powersave:
   cpu_load_governor:
+    governor: system
     up_threshold: 0.85
     down_threshold: 0.60
     smoothing_up: 0.40
@@ -365,6 +371,7 @@ powersave:
 # Balance — daily use
 balance:
   cpu_load_governor:
+    governor: system
     up_threshold: 0.80
     down_threshold: 0.50
     smoothing_up: 0.60
@@ -385,6 +392,7 @@ balance:
 # Performance — prioritize responsiveness
 performance:
   cpu_load_governor:
+    governor: system
     up_threshold: 0.65
     down_threshold: 0.40
     smoothing_up: 0.80
@@ -405,6 +413,7 @@ performance:
 # Fast — maximum performance
 fast:
   cpu_load_governor:
+    governor: system
     up_threshold: 0.01
     down_threshold: 0.01
     smoothing_up: 1.0
@@ -465,7 +474,7 @@ Attached to a `libgui.so` frame submission function (uprobe), triggered on every
   * **Kernel-side timestamp capture**: Records frame submission time via `bpf_ktime_get_ns()` and sends it through RingBuf, with a separate PerfEventArray fallback when RingBuf creation is unsupported. CPU, RingBuf FPS and PerfEvent FPS probes are compiled separately so their map failures are isolated. Device kernel features and permissions still determine availability.
   * **Per-PID uprobe attachment**: Each target process holds an independent eBPF instance. On PID switch, the old instance is automatically detached and a new one attached to the new PID, ensuring only the target process's frame events are captured.
   * **Userspace frame interval calculation**: Merges events by kernel timestamp, emits each new interval once, and filters abnormal intervals (1ms–200ms). It never replays a cached interval while rendering is stopped.
-  * **Monitor failure handling**: CLG takes control only after valid CPU samples arrive; FAS also requires frames from the target process. Monitor exit or a two-second sample timeout releases the affected controller and attempts to restore the previous governor and frequency limits. Controller handovers release old frequency locks immediately.
+  * **Monitor failure handling**: CLG takes control only after valid CPU samples arrive; FAS also requires frames from the target process. Monitor exit or a two-second sample timeout releases the affected controller and attempts to restore the previous governor and frequency limits. Controller handovers first restore the previous governor and frequency limits.
 
 -----
 
